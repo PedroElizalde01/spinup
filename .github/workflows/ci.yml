@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # Every branch, not just main: a release branch has to be able to prove itself
+  # before it is merged or tagged.
   push:
-    branches: ["main"]
   pull_request:
   workflow_dispatch:
   # Lets the release workflow reuse this as its gate.
