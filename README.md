@@ -23,6 +23,30 @@ Project environment launcher CLI
 
 For Windows today, use WSL if you want the same Bash and tmux-oriented workflow.
 
+## Requirements
+
+- **tmux 3.0 or newer**, only for actions using `mode: tmux`. `runit` passes each
+  pane its command, working directory, and environment through tmux itself, which
+  needs the `-e` flag added in 3.0. Actions using `mode: simple` need no tmux.
+- **Docker**, only for projects with a Compose file.
+
+`runit <alias> --check` reports what a given project actually needs.
+
+## Alias rules
+
+An alias becomes a real command in `~/.local/bin`, so the accepted format is narrow:
+
+- lowercase letters, digits, `-` and `_`
+- must start with a letter or digit, at most 64 characters
+
+Uppercase input is lowercased, so `MyApp` and `myapp` are the same project. `.` and
+`:` are rejected because tmux reads them as session/window/pane separators.
+
+`runit` refuses an alias that would shadow a command already on your `PATH`, and
+refuses to overwrite a file in the shim directory that it did not create. Aliases
+registered before these rules existed are renamed automatically on the next run,
+and the change is reported.
+
 ## Stack detection
 
 `runit` currently detects these stack types:
@@ -122,6 +146,7 @@ runit --list
 - `runit <alias> --edit --interactive`: edit the default action with prompts
 - `runit <alias> --remove`: remove the registered project and generated shim
 - `runit --list`: list registered projects
+- `runit --version`: print the installed version
 
 ## Terminal Examples
 
@@ -389,6 +414,7 @@ Arguments:
   alias             registered project alias
 
 Options:
+  -v, --version     output the version number
   --check           validate required tools for a registered project
   --doctor          inspect a registered project
   --env             show loaded environment variables
@@ -421,6 +447,23 @@ git push origin main v0.2.2
 ```
 
 Pushing a `v*` tag triggers GitHub Actions to build release binaries and publish a GitHub Release.
+
+## Files and environment
+
+| Path | Purpose |
+|---|---|
+| `.runit.yml` | Per-project config, committed with the repo |
+| `${XDG_CONFIG_HOME:-~/.config}/runit/projects.json` | Alias-to-path registry |
+| `~/.local/bin/<alias>` | Generated command for each registered project |
+
+`XDG_CONFIG_HOME` relocates the registry; a relative value is ignored, as the XDG
+spec requires. `RUNIT_SHIM_DIR` relocates generated commands, which is mainly useful
+for testing.
+
+Environment files are read from the project root in this order, with later files
+winning: `.env`, `.env.local`, `.env.development`, `.env.<action>`. Values are passed
+to each service directly, never echoed into a terminal. Use `runit <alias> --env` to
+see which keys are loaded, with values masked.
 
 ## Config
 

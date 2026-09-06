@@ -64,6 +64,8 @@ Severity describes impact on RUNIT users, not a claim of remotely exploitable se
 
 ### F01. Alias handling permits file traversal, command substitution, and executable replacement
 
+> **Status: fixed** in `d995e2b`. Regression tests cover it.
+
 **High · P0 · Reproduced**  
 Locations: `src/core/registry.ts:9–23,63–79`, `src/core/shim.ts:6–21`, `src/commands/run.ts:164–188`.
 
@@ -82,6 +84,8 @@ Removal also derives a path from the raw alias. Ordinary aliases can shadow comm
 
 ### F02. Starting a project destroys an existing tmux session, including prefix matches
 
+> **Status: fixed** in `d633ffd`. Regression tests cover it.
+
 **High · P0 · Reproduced**  
 Locations: `src/tmux/runner.ts:111–115`, `src/tmux/session.ts:34–56`.
 
@@ -92,6 +96,8 @@ The launcher checks for a session using the bare alias and then kills it. tmux r
 **Acceptance:** Repeated launch preserves the existing session and processes. A longer-name or unrelated exact-name session is never killed.
 
 ### F03. tmux launch exposes environment secrets as terminal text
+
+> **Status: fixed** in `fcedd63`. Regression tests cover it.
 
 **High · P0 · Reproduced**  
 Locations: `src/tmux/runner.ts:31–32,76–88`.
@@ -105,6 +111,8 @@ Passing values with tmux environment options removes this terminal disclosure, b
 **Acceptance:** A known dummy secret never appears in pane capture or RUNIT diagnostic output.
 
 ### F04. The compiled binary loads `.env` from the directory it was invoked in
+
+> **Status: fixed** in `d633ffd`. Regression tests cover it.
 
 **High · P0 · Reproduced**  
 Locations: `scripts/build-release.sh:115–121`, `src/core/env.ts:24–49`, `src/core/executor.ts:105–113`.
@@ -147,6 +155,8 @@ A first registration with `--regenerate` also replaced an existing configuration
 
 ### F07. Prefixing arbitrary commands with `exec` changes their meaning
 
+> **Status: fixed** in `24b309f`. Regression tests cover it.
+
 **High · P0 · Reproduced**  
 Locations: `src/core/executor.ts:105–111`, `src/tmux/runner.ts:87`.
 
@@ -157,6 +167,8 @@ Locations: `src/core/executor.ts:105–111`, `src/tmux/runner.ts:87`.
 **Acceptance:** Compound commands, inline environment assignments, pipelines, multiline commands, and quoted paths behave consistently in simple and tmux modes.
 
 ### F08. Failed services do not stop siblings, and cancellation leaves descendants
+
+> **Status: fixed** in `24b309f`. Regression tests cover it.
 
 **High · P0 · Reproduced**  
 Locations: `src/core/executor.ts:56–80,120–160`.
@@ -170,6 +182,8 @@ A separate task spawned a grandchild process. Sending SIGTERM to RUNIT allowed t
 **Acceptance:** A startup failure returns promptly and leaves no owned descendants. SIGINT and SIGTERM release test ports and terminate an npm/shell/child chain, not just its immediate parent.
 
 ### F09. Simple mode buffers long-running logs and does not forward stdin
+
+> **Status: fixed** in `24b309f`. Regression tests cover it.
 
 **High for long sessions · P1 · Reproduced**  
 Locations: `src/core/executor.ts:18–39,105–118`.
@@ -194,6 +208,8 @@ A preparation task scheduled a file write after 300 ms. Its dependent immediatel
 **Acceptance:** A dependent waits for the declared condition. A timeout identifies the blocking dependency. A failed setup job prevents dependents from starting, while independent services are not serialized by unrelated delays.
 
 ### F11. tmux creation assumes user settings and terminal capacity
+
+> **Status: fixed** in `fcedd63`. Regression tests cover it.
 
 **Medium · P1 · Reproduced and source-confirmed**  
 Locations: `src/tmux/layout.ts:22–52`, `src/tmux/runner.ts:35–44,115–125`, `src/tmux/session.ts:59–66`.
@@ -294,6 +310,8 @@ The graph view is also not a graph: two independent services are printed as `a �
 
 ### F18. The CLI cannot select generated actions or identify its own version
 
+> **Status: partially fixed** in `d633ffd`. See the progress table in section 11.
+
 **Medium · P1 · Reproduced and source-confirmed**  
 Locations: `src/cli.ts:28–111`, `src/core/shim.ts:13`, `src/commands/run.ts:343–363`, `src/core/generator.ts:65–91`.
 
@@ -306,6 +324,8 @@ The generator emits `docker`, `prisma-generate`, and `prisma-migrate`, but every
 **Acceptance:** A generated non-default action runs without rewriting config. Source and compiled binaries report the same version. Every documented shim argument works or gives a precise validation error.
 
 ### F19. Registry updates lose concurrent registrations, and persistence is not atomic
+
+> **Status: fixed** in `d995e2b`. Regression tests cover it.
 
 **Medium · P1 · Reproduced and source-confirmed**  
 Locations: `src/core/registry.ts:58–74`, `src/core/config.ts:163–165`, `src/core/shim.ts:10–21`, `src/commands/run.ts:149–161`, `src/commands/remove.ts:11–12`, `src/utils/paths.ts:16–25`.
@@ -321,6 +341,8 @@ SQLite is not required merely to store alias-to-path mappings. Consider it only 
 **Acceptance:** Parallel registrations survive. Interrupted writes leave a valid old or new file. Failed shim creation does not leave a success-looking registration. Removal never deletes an unowned file.
 
 ### F20. Both locked YAML parsers have published vulnerabilities
+
+> **Status: fixed** in `d633ffd`. Regression tests cover it.
 
 **High/Moderate upstream severity · P0 · Verified dependency audit and advisory lookup**  
 Locations: `bun.lock`, `src/core/config.ts:4,130–132`, `src/docker/compose.ts:1,29–31`.
@@ -339,6 +361,8 @@ These advisories were published after the reviewed March release. RUNIT parses p
 **Acceptance:** Audit no longer flags these locked versions, malformed input fails within bounded resources, and anchor/merge fixtures continue to work. Sources: S29–S32.
 
 ### F21. Releases have no test gate or target-platform execution evidence
+
+> **Status: partially fixed** in `d633ffd`. See the progress table in section 11.
 
 **High operational risk · P1 · Source-confirmed**  
 Location: `.github/workflows/release.yml:1–63`.
@@ -616,3 +640,46 @@ So `path.basename(process.argv0)` yields the alias in both cases. Dispatch is fe
 This does **not** overturn F01's recommendation to keep quoted wrappers for now. `argv0` is set by the calling process and is therefore attacker-controlled input in the same class as any other argument, so it must be validated against the registry rather than trusted. Ordinary shells set it faithfully, but a caller using `execve` can set it to anything. The decision stands on its own merits; the reasoning above should replace the claim that the mechanism does not work.
 
 **Acceptance if adopted:** a symlink invoked through PATH, through a relative path, and through an absolute path all resolve to the same registered alias; an `argv0` value not present in the registry is rejected rather than executed.
+
+---
+
+## 11. Remediation progress
+
+Updated 2026-09-06. Each row was reproduced before the change and re-verified after.
+
+| Finding | Status | Commit | Evidence |
+|---|---|---|---|
+| F01 alias traversal / substitution / clobbering | fixed | `d995e2b` | `../../ESCAPED` rejected, 0 files escaped; a user's `precious` executable survives; `runit ls` refused; `toString` no longer resolves |
+| F02 prefix-matched session killed | fixed | `d633ffd` | `api-staging` survives launching `api` |
+| F03 secrets in pane scrollback | fixed | `fcedd63` | process reads the value; `SESSION_SECRET=` appears 0 times in `capture-pane` |
+| F04 caller-directory dotenv leak | fixed | `d633ffd` | old build prints `[leaked]`, new prints `[]` |
+| F07 `exec` prefix truncating commands | fixed | `24b309f` | `FIRSTSECOND`, inline assignment, and pipelines all correct |
+| F08 no fail-fast, orphaned descendants | fixed | `24b309f` | failure returns in 3s (was a hang); 0 surviving descendants after SIGTERM, exit 130 |
+| F09 output buffered to a 100MB ceiling | fixed | `24b309f` | 120MB task: old build exit 1, new build exit 0 |
+| F11 base-index and pane capacity | fixed | `fcedd63` | 8 of 8 panes under `base-index 1` (was 4 of 8, rename failing) |
+| F19 lost registrations, no atomicity, no XDG | fixed | `d995e2b` | 20 concurrent registrations keep 20 (was 16 with 20 shims); XDG honored |
+| F20 YAML advisories | fixed | `d633ffd` | `bun audit`: 4 advisories to none; `js-yaml` removed |
+| F18 no version, excess args discarded | partial | `d633ffd` | `--version` and strict arguments done; **action selection still missing** |
+| F21 no test gate | partial | `d633ffd` | CI gates typecheck/test/audit/shellcheck and a binary smoke test; **no macOS execution evidence yet** |
+
+Alias migration for entries registered before F01's format was enforced landed in
+`616bfa7`: they are renamed once, their shims moved, and each change reported.
+
+**Still open:** F05, F06 (M1); F10, F12–F17 and the rest of F18 (M2/M3); F21–F23 (M4).
+The test suite grew from 6 tests across 3 files to 48 across 7, now covering the
+executor, registry, shim, and a real tmux server driven through `TMUX_TMPDIR`.
+
+### Correction to F19's recommendation
+
+F19 says atomic replacement alone does not prevent lost updates. That is correct and
+the implementation reflects it: a `wx` lock file serializes the whole read-modify-write,
+with a 5s acquisition timeout and a 30s stale reclaim, *and* the registry and
+`.runit.yml` are replaced through a temporary file and rename. Rename alone was
+measured at 16 of 20 surviving registrations; the lock is what makes it 20 of 20.
+
+### Note on F13, still open
+
+While fixing F19 a related inconsistency appeared that F13 does not mention: the
+20-concurrent-registration run produced 16 registry entries but 20 shims, leaving
+executables on `PATH` for aliases that were never registered. Shim creation now
+precedes registration, since that is the step that can legitimately refuse.
