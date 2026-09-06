@@ -1,4 +1,4 @@
-import YAML from "js-yaml";
+import YAML from "yaml";
 
 import type { DockerComposeService } from "./service.ts";
 
@@ -27,7 +27,9 @@ function normalizeDependsOn(value: ComposeDependsOn): string[] {
 }
 
 export function parseComposeServices(raw: string): DockerComposeService[] {
-  const parsed = (YAML.load(raw) as ComposeDocument | undefined) ?? {};
+  // merge: true keeps YAML 1.1 "<<" merge-key behavior, which Compose files rely on for
+  // anchors. Without it the key is parsed literally and anchored fields are lost.
+  const parsed = (YAML.parse(raw, { merge: true }) as ComposeDocument | undefined) ?? {};
   const services = parsed.services ?? {};
 
   return Object.entries(services)

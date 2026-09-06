@@ -112,7 +112,17 @@ fi
 mkdir -p "$(dirname "${OUTPUT}")"
 
 echo "Building ${OUTPUT}"
-BUILD_ARGS=(src/cli.ts --compile --outfile "${OUTPUT}")
+
+# Bun autoloads .env and bunfig.toml from the *invocation* directory into compiled
+# executables by default. runit launches projects from anywhere, so that would leak
+# the caller's environment into an unrelated project's services. Always disable it.
+BUILD_ARGS=(
+  src/cli.ts
+  --compile
+  --no-compile-autoload-dotenv
+  --no-compile-autoload-bunfig
+  --outfile "${OUTPUT}"
+)
 
 if [[ -n "${TARGET}" ]]; then
   BUILD_ARGS+=(--target "${TARGET}")

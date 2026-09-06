@@ -31,9 +31,16 @@ export async function ensureTmuxInstalled(): Promise<void> {
   }
 }
 
+// tmux resolves -t by exact name, then name prefix, then pattern. Without the "="
+// prefix, alias "api" matches a user's unrelated "api-staging" session -- which
+// sessionExists/killSession would then destroy.
+function exactTarget(sessionName: string): string {
+  return `=${sessionName}`;
+}
+
 export async function sessionExists(sessionName: string): Promise<boolean> {
   try {
-    await runTmux(["has-session", "-t", sessionName]);
+    await runTmux(["has-session", "-t", exactTarget(sessionName)]);
     return true;
   } catch (error) {
     if (isTmuxMissing(error)) {
@@ -53,7 +60,7 @@ export async function createSession(sessionName: string): Promise<void> {
 }
 
 export async function killSession(sessionName: string): Promise<void> {
-  await runTmux(["kill-session", "-t", sessionName]);
+  await runTmux(["kill-session", "-t", exactTarget(sessionName)]);
 }
 
 export async function attachSession(sessionName: string): Promise<void> {
@@ -63,5 +70,5 @@ export async function attachSession(sessionName: string): Promise<void> {
     return;
   }
 
-  await execa("tmux", ["attach", "-t", sessionName], { stdio: "inherit" });
+  await execa("tmux", ["attach", "-t", exactTarget(sessionName)], { stdio: "inherit" });
 }

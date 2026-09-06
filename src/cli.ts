@@ -2,6 +2,8 @@
 
 import { Command, Option } from "commander";
 
+// Bundled into the compiled binary, so source and release report the same version.
+import packageJson from "../package.json" with { type: "json" };
 import { checkProject } from "./commands/check.ts";
 import { doctorProject, previewProjectEnv, previewProjectGraph, previewProjectPlan } from "./commands/doctor.ts";
 import { editProject } from "./commands/edit.ts";
@@ -28,6 +30,10 @@ const program = new Command();
 program
   .name("runit")
   .description("Run registered project environments from anywhere.")
+  .version(packageJson.version, "-v, --version")
+  // Unrecognized arguments were silently discarded, so shim-forwarded flags looked
+  // like they worked. Fail loudly until a passthrough contract exists.
+  .allowExcessArguments(false)
   .argument("[alias]", "registered project alias")
   .addOption(new Option("--start", "start the registered project").hideHelp())
   .option("--check", "validate required tools for a registered project")
