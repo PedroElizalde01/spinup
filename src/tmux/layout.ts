@@ -1,53 +1,67 @@
 import { execa } from "execa";
 
-import type { Window } from "../types/config.ts";
-
-type WindowTarget = {
-  sessionName: string;
-  windowIndex: number;
+export type PaneSpawn = {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  cmd: string;
 };
 
-async function runTmux(args: string[]): Promise<void> {
-  await execa("tmux", args);
+async function runTmux(args: string[]): Promise<string> {
+  const { stdout } = await execa("tmux", args);
+  return stdout.trim();
 }
 
-function getWindowTarget({ sessionName, windowIndex }: WindowTarget): string {
-  return `${sessionName}:${windowIndex}`;
+/**
+ * tmux takes environment as repeated -e KEY=VALUE arguments and hands them to the
+ * spawned process directly. Nothing is written to a shell line, so values never
+ * reach the pane's scrollback.
+ */
+function toEnvArgs(env: NodeJS.ProcessEnv): string[] {
+  return Object.entries(env).flatMap(([key, value]) =>
+    value === undefined ? [] : ["-e", `${key}=${value}`],
+  );
 }
 
-function getPaneTarget(windowTarget: WindowTarget, paneIndex: number): string {
-  return `${getWindowTarget(windowTarget)}.${paneIndex}`;
+export async function renameWindow(windowId: string, name: string): Promise<void> {
+  await runTmux(["rename-window", "-t", windowId, name]);
 }
 
-export async function createWindow(sessionName: string, windowIndex: number, window: Window): Promise<void> {
-  if (windowIndex === 0) {
-    await runTmux(["rename-window", "-t", `${sessionName}:0`, window.name]);
-    return;
+/**
+ * Adds a pane and immediately reapplies the layout. Splitting repeatedly before
+ * laying out exhausts the window: eight services in an 80x24 window produced
+ * "no space for new pane" after the fourth.
+ */
+export async function addPane(windowId: string, layout?: string): Promise<string> {
+  const paneId = await runTmux(["split-window", "-t", windowId, "-P", "-F", "#{pane_id}"]);
+
+  if (layout) {
+    await applyWindowLayout(windowId, layout);
   }
 
-  await runTmux(["new-window", "-t", sessionName, "-n", window.name]);
+  return paneId;
 }
 
-export async function createPanes(sessionName: string, windowIndex: number, paneCount: number): Promise<void> {
-  if (paneCount <= 1) {
-    return;
-  }
-
-  const windowTarget = getWindowTarget({ sessionName, windowIndex });
-
-  for (let paneIndex = 1; paneIndex < paneCount; paneIndex += 1) {
-    await runTmux(["split-window", "-t", windowTarget]);
-  }
-}
-
-export async function applyWindowLayout(sessionName: string, windowIndex: number, layout?: string): Promise<void> {
+export async function applyWindowLayout(windowId: string, layout?: string): Promise<void> {
   if (!layout) {
     return;
   }
 
-  await runTmux(["select-layout", "-t", `${sessionName}:${windowIndex}`, layout]);
+  await runTmux(["select-layout", "-t", windowId, layout]);
 }
 
-export function getPaneId(sessionName: string, windowIndex: number, paneIndex: number): string {
-  return getPaneTarget({ sessionName, windowIndex }, paneIndex);
+/**
+ * Replaces whatever a pane is running with the configured command, in the right
+ * directory and environment. -k kills the placeholder shell first.
+ */
+export async function respawnPane(paneId: string, spawn: PaneSpawn): Promise<void> {
+  await runTmux([
+    "respawn-pane",
+    "-k",
+    "-t",
+    paneId,
+    "-c",
+    spawn.cwd,
+    ...toEnvArgs(spawn.env),
+    spawn.cmd,
+  ]);
 }

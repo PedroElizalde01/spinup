@@ -1,19 +1,24 @@
 import path from "node:path";
-
-import { execa } from "execa";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { buildDependencyGraph } from "../core/dependencies.ts";
-import { applyWindowLayout, createPanes, createWindow, getPaneId } from "./layout.ts";
-import { attachSession, createSession, ensureTmuxInstalled, killSession, sessionExists } from "./session.ts";
+import { addPane, applyWindowLayout, renameWindow, respawnPane } from "./layout.ts";
+import {
+  attachSession,
+  createSession,
+  createWindow,
+  ensureTmuxInstalled,
+  exactTarget,
+  killSession,
+  killSessionQuietly,
+  sessionExists,
+} from "./session.ts";
 import type { Pane, RunitConfig, TmuxAction } from "../types/config.ts";
 
-async function runTmux(args: string[]): Promise<void> {
-  await execa("tmux", args);
-}
-
-function escapeShellValue(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+type PlacedPane = {
+  pane: Pane;
+  paneId: string;
+};
 
 function resolvePaneCwd(projectRoot: string, config: RunitConfig, cwd: string): string {
   const actionRoot = path.resolve(projectRoot, config.root);
@@ -24,72 +29,61 @@ function countPanes(action: TmuxAction): number {
   return action.windows.reduce((total, window) => total + window.panes.length, 0);
 }
 
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function sendPaneCommand(target: string, command: string): Promise<void> {
-  await runTmux(["send-keys", "-t", target, command, "C-m"]);
-}
-
-async function prepareWindow(
-  sessionName: string,
-  windowIndex: number,
+/**
+ * Builds every window and pane up front, recording the id tmux assigned to each.
+ * Panes start as the default shell and are replaced with their real command later,
+ * so layout position stays in config order while start order follows dependencies.
+ */
+async function buildWorkspace(
+  sessionId: string,
+  firstWindowId: string,
+  firstPaneId: string,
   action: TmuxAction,
-): Promise<void> {
-  const window = action.windows[windowIndex];
+): Promise<PlacedPane[]> {
+  const placed: PlacedPane[] = [];
 
-  await createWindow(sessionName, windowIndex, window);
-  await createPanes(sessionName, windowIndex, window.panes.length);
-  await applyWindowLayout(sessionName, windowIndex, window.layout);
-}
+  for (const [windowIndex, window] of action.windows.entries()) {
+    let windowId: string;
+    let initialPaneId: string;
 
-function escapeEnvAssignment(key: string, value: string): string {
-  return `${key}=${escapeShellValue(value)}`;
-}
-
-function flattenPanes(
-  sessionName: string,
-  action: TmuxAction,
-): Array<{ pane: Pane; target: string }> {
-  return action.windows.flatMap((window, windowIndex) =>
-    window.panes.map((pane, paneIndex) => ({
-      pane,
-      target: getPaneId(sessionName, windowIndex, paneIndex),
-    })),
-  );
-}
-
-async function seedPaneCommands(
-  sessionName: string,
-  projectRoot: string,
-  config: RunitConfig,
-  action: TmuxAction,
-  environment: NodeJS.ProcessEnv,
-): Promise<void> {
-  const ordered = buildDependencyGraph(flattenPanes(sessionName, action).map(({ pane }) => pane));
-  const paneTargets = new Map(flattenPanes(sessionName, action).map(({ pane, target }) => [pane.name, target]));
-
-  for (const pane of ordered) {
-    const target = paneTargets.get(pane.name)!;
-    const cwd = resolvePaneCwd(projectRoot, config, pane.cwd);
-    const envEntries = Object.entries({
-      ...environment,
-      ...pane.env,
-    }).filter(([, value]) => value !== undefined);
-
-    const commandParts = [`cd ${escapeShellValue(cwd)}`];
-
-    if (envEntries.length > 0) {
-      commandParts.push(`export ${envEntries.map(([key, value]) => escapeEnvAssignment(key, String(value))).join(" ")}`);
+    if (windowIndex === 0) {
+      // Reuse the window the session was created with.
+      windowId = firstWindowId;
+      initialPaneId = firstPaneId;
+      await renameWindow(windowId, window.name);
+    } else {
+      const created = await createWindow(sessionId, window.name);
+      windowId = created.windowId;
+      initialPaneId = created.paneId;
     }
 
-    // "exec <cmd>" replaced the pane's shell at the first word, truncating compound
-    // commands and breaking inline assignments. Handing the whole program to "sh -c"
-    // keeps exec's benefit -- the pane closes when the command exits -- without
-    // reinterpreting the command itself.
-    commandParts.push(`exec sh -c ${escapeShellValue(pane.cmd)}`);
-    await sendPaneCommand(target, commandParts.join(" && "));
+    placed.push({ pane: window.panes[0]!, paneId: initialPaneId });
+
+    for (const pane of window.panes.slice(1)) {
+      placed.push({ pane, paneId: await addPane(windowId, window.layout) });
+    }
+
+    await applyWindowLayout(windowId, window.layout);
+  }
+
+  return placed;
+}
+
+async function startPanes(
+  projectRoot: string,
+  config: RunitConfig,
+  placed: PlacedPane[],
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  const paneIds = new Map(placed.map(({ pane, paneId }) => [pane.name, paneId]));
+  const ordered = buildDependencyGraph(placed.map(({ pane }) => pane));
+
+  for (const pane of ordered) {
+    await respawnPane(paneIds.get(pane.name)!, {
+      cwd: resolvePaneCwd(projectRoot, config, pane.cwd),
+      env: { ...environment, ...pane.env },
+      cmd: pane.cmd,
+    });
 
     if (pane.delay) {
       await delay(pane.delay);
@@ -113,17 +107,20 @@ export async function launchTmuxWorkspace(
 
   if (await sessionExists(sessionName)) {
     console.log("[tmux] resetting existing session");
-    await killSession(sessionName);
+    await killSession(exactTarget(sessionName));
   }
 
-  await createSession(sessionName);
+  const { sessionId, windowId, paneId } = await createSession(sessionName);
 
-  for (const windowIndex of action.windows.keys()) {
-    await prepareWindow(sessionName, windowIndex, action);
+  try {
+    const placed = await buildWorkspace(sessionId, windowId, paneId, action);
+    console.log("[deps] resolving dependencies");
+    await startPanes(projectRoot, config, placed, environment);
+  } catch (error) {
+    // Never leave a half-built workspace behind; remove only the session we made.
+    await killSessionQuietly(sessionId);
+    throw error;
   }
 
-  console.log("[deps] resolving dependencies");
-  await seedPaneCommands(sessionName, projectRoot, config, action, environment);
-
-  await attachSession(sessionName);
+  await attachSession(sessionName, sessionId);
 }

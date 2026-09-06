@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseComposeServices } from "../src/docker/compose.ts";
+import { exactTarget } from "../src/tmux/session.ts";
 
 describe("compose parsing after the js-yaml -> yaml migration", () => {
   // The `yaml` package defaults to YAML 1.2, where "<<" is an ordinary key. Without
@@ -57,13 +58,8 @@ describe("build and CLI safety flags", () => {
   });
 
   // F02: tmux -t matches by name prefix, so alias "api" resolved a user's unrelated
-  // "api-staging" session and killed it.
-  test("tmux session targeting is exact-match", async () => {
-    const source = await Bun.file(new URL("../src/tmux/session.ts", import.meta.url)).text();
-
-    expect(source).toContain("`=${sessionName}`");
-    for (const command of ["has-session", "kill-session"]) {
-      expect(source).toContain(`"${command}", "-t", exactTarget(sessionName)`);
-    }
+  // "api-staging" session. The behavioral counterpart lives in tmux-workspace.test.ts.
+  test("tmux session targets use the exact-match prefix", () => {
+    expect(exactTarget("api")).toBe("=api");
   });
 });
