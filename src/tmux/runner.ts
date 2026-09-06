@@ -84,7 +84,11 @@ async function seedPaneCommands(
       commandParts.push(`export ${envEntries.map(([key, value]) => escapeEnvAssignment(key, String(value))).join(" ")}`);
     }
 
-    commandParts.push(`exec ${pane.cmd}`);
+    // "exec <cmd>" replaced the pane's shell at the first word, truncating compound
+    // commands and breaking inline assignments. Handing the whole program to "sh -c"
+    // keeps exec's benefit -- the pane closes when the command exits -- without
+    // reinterpreting the command itself.
+    commandParts.push(`exec sh -c ${escapeShellValue(pane.cmd)}`);
     await sendPaneCommand(target, commandParts.join(" && "));
 
     if (pane.delay) {
