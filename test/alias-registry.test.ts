@@ -2,7 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { getProject, listProjects, registerProject, removeProject, validateAlias } from "../src/core/registry.ts";
+import {
+  getProject,
+  listProjects,
+  migrateLegacyAliases,
+  registerProject,
+  removeProject,
+  sanitizeLegacyAlias,
+  validateAlias,
+} from "../src/core/registry.ts";
 import { createShim, getShimPath, removeShim } from "../src/core/shim.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
@@ -151,5 +159,77 @@ describe("registry durability", () => {
     // The XDG spec says a relative value must be ignored, not resolved against cwd.
     process.env.XDG_CONFIG_HOME = "relative/path";
     await expect(listProjects()).resolves.toBeDefined();
+  });
+});
+
+describe("legacy alias migration", () => {
+  async function seedLegacyRegistry(configHome: string, registry: Record<string, string>): Promise<void> {
+    const dir = path.join(configHome, "runit");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "projects.json"), `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+  }
+
+  test("renames entries registered before the format was enforced", async () => {
+    const { configHome } = await isolate();
+    await seedLegacyRegistry(configHome, {
+      "my.app": "/tmp/a",
+      MyApp: "/tmp/b",
+      "with space": "/tmp/c",
+      "ok-one": "/tmp/d",
+    });
+
+    const migrations = await migrateLegacyAliases();
+    const renamed = new Map(migrations.map((entry) => [entry.from, entry.to]));
+
+    expect(renamed.get("my.app")).toBe("my-app");
+    expect(renamed.get("MyApp")).toBe("myapp");
+    expect(renamed.get("with space")).toBe("with-space");
+    // Already canonical, so it is left alone.
+    expect(renamed.has("ok-one")).toBe(false);
+
+    const registry = await listProjects();
+    expect(Object.keys(registry).sort()).toEqual(["my-app", "myapp", "ok-one", "with-space"]);
+    expect(registry["my-app"]).toBe("/tmp/a");
+    expect(await getProject("my-app")).toBe("/tmp/a");
+  });
+
+  test("is a no-op on an already-canonical registry", async () => {
+    const { configHome } = await isolate();
+    await seedLegacyRegistry(configHome, { "ok-one": "/tmp/a", ok_two: "/tmp/b" });
+
+    expect(await migrateLegacyAliases()).toEqual([]);
+  });
+
+  test("does not collide two legacy names onto one entry", async () => {
+    const { configHome } = await isolate();
+    await seedLegacyRegistry(configHome, { "my.app": "/tmp/a", "my app": "/tmp/b" });
+
+    await migrateLegacyAliases();
+
+    const registry = await listProjects();
+    expect(Object.keys(registry).sort()).toEqual(["my-app", "my-app-2"]);
+    expect(Object.values(registry).sort()).toEqual(["/tmp/a", "/tmp/b"]);
+  });
+
+  test("keeps an unrescuable entry instead of dropping it", async () => {
+    const { configHome } = await isolate();
+    await seedLegacyRegistry(configHome, { "...": "/tmp/a" });
+
+    const migrations = await migrateLegacyAliases();
+
+    expect(migrations[0]?.to).toBeUndefined();
+    expect(migrations[0]?.reason).toBeDefined();
+    // The path is still recorded, so nothing is lost. Assert on keys directly:
+    // toHaveProperty would read "..." as a nested property path.
+    const registry = await listProjects();
+    expect(Object.keys(registry)).toEqual(["..."]);
+    expect(registry["..."]).toBe("/tmp/a");
+  });
+
+  test("sanitizes to a canonical alias or reports failure", () => {
+    expect(sanitizeLegacyAlias("My.App")).toBe("my-app");
+    expect(sanitizeLegacyAlias("  Weird//Name  ")).toBe("weird-name");
+    expect(sanitizeLegacyAlias("---")).toBeUndefined();
+    expect(sanitizeLegacyAlias("runit")).toBeUndefined();
   });
 });

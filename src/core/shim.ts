@@ -97,6 +97,23 @@ export async function createShim(alias: string): Promise<void> {
   await chmod(shimPath, 0o755);
 }
 
+/**
+ * Reclaims a shim whose name predates alias validation, so it cannot be routed
+ * through getShimPath. basename() plus the containment check neutralizes any
+ * separators the stored name may contain.
+ */
+export async function reclaimLegacyShim(rawName: string): Promise<boolean> {
+  const shimDir = path.resolve(getShimDir());
+  const candidate = path.resolve(path.join(shimDir, path.basename(rawName)));
+
+  if (path.dirname(candidate) !== shimDir || !(await isRunitShim(candidate))) {
+    return false;
+  }
+
+  await rm(candidate, { force: true });
+  return true;
+}
+
 export async function removeShim(alias: string): Promise<void> {
   const shimPath = getShimPath(alias);
 

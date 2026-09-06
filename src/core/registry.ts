@@ -46,6 +46,25 @@ export function validateAlias(alias: string): string {
   return normalizedAlias;
 }
 
+export function isCanonicalAlias(alias: string): boolean {
+  return ALIAS_PATTERN.test(alias) && !RESERVED_ALIASES.has(alias);
+}
+
+/**
+ * Best-effort canonical form for an alias registered before the format was
+ * enforced, e.g. "My.App" -> "my-app". Returns undefined when nothing usable
+ * survives, so the caller can report it rather than silently dropping the entry.
+ */
+export function sanitizeLegacyAlias(alias: string): string | undefined {
+  const candidate = normalizeAlias(alias)
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 64);
+
+  return isCanonicalAlias(candidate) ? candidate : undefined;
+}
+
 async function ensureRegistryDir(): Promise<void> {
   await mkdir(getConfigDir(), { recursive: true });
 }
@@ -186,4 +205,66 @@ export async function getProject(alias: string): Promise<string | undefined> {
 
 export async function listProjects(): Promise<ProjectRegistry> {
   return readRegistryUnlocked();
+}
+
+export type AliasMigration = {
+  from: string;
+  to?: string;
+  reason?: string;
+};
+
+/**
+ * Rewrites entries registered before the alias format was enforced. Runs only when
+ * a non-canonical key is actually present, so the normal path never pays for the
+ * lock. Entries that cannot be rescued are reported and left in place rather than
+ * discarded.
+ */
+export async function migrateLegacyAliases(): Promise<AliasMigration[]> {
+  const existing = await readRegistryUnlocked();
+
+  if (Object.keys(existing).every((alias) => isCanonicalAlias(alias))) {
+    return [];
+  }
+
+  return withRegistryLock(async () => {
+    const registry = await readRegistryUnlocked();
+    const migrations: AliasMigration[] = [];
+    let changed = false;
+
+    for (const legacyAlias of Object.keys(registry)) {
+      if (isCanonicalAlias(legacyAlias)) {
+        continue;
+      }
+
+      const projectPath = registry[legacyAlias]!;
+      const base = sanitizeLegacyAlias(legacyAlias);
+
+      if (!base) {
+        migrations.push({ from: legacyAlias, reason: "no valid alias could be derived" });
+        continue;
+      }
+
+      let candidate = base;
+
+      for (let suffix = 2; Object.hasOwn(registry, candidate) && suffix < 100; suffix += 1) {
+        candidate = `${base}-${suffix}`;
+      }
+
+      if (Object.hasOwn(registry, candidate)) {
+        migrations.push({ from: legacyAlias, reason: "every candidate name was taken" });
+        continue;
+      }
+
+      delete registry[legacyAlias];
+      registry[candidate] = projectPath;
+      migrations.push({ from: legacyAlias, to: candidate });
+      changed = true;
+    }
+
+    if (changed) {
+      await writeRegistryUnlocked(registry);
+    }
+
+    return migrations;
+  });
 }

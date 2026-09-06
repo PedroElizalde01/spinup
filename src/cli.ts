@@ -10,6 +10,33 @@ import { editProject } from "./commands/edit.ts";
 import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
 import { runProject } from "./commands/run.ts";
+import { migrateLegacyAliases } from "./core/registry.ts";
+import { createShim, reclaimLegacyShim } from "./core/shim.ts";
+
+/**
+ * Aliases registered before the format was enforced would otherwise report as
+ * invalid rather than resolving. Rename them once, move their shims, and say so.
+ */
+async function migrateRegistry(): Promise<void> {
+  const migrations = await migrateLegacyAliases();
+
+  if (migrations.length === 0) {
+    return;
+  }
+
+  for (const migration of migrations) {
+    if (!migration.to) {
+      process.stderr.write(
+        `[migrate] could not rename alias "${migration.from}" (${migration.reason}); it is still registered but cannot be used.\n`,
+      );
+      continue;
+    }
+
+    await createShim(migration.to);
+    await reclaimLegacyShim(migration.from);
+    process.stderr.write(`[migrate] renamed alias "${migration.from}" to "${migration.to}"\n`);
+  }
+}
 
 type CliOptions = {
   check?: boolean;
@@ -47,6 +74,8 @@ program
   .option("--remove", "remove a registered project and its shim")
   .option("--list", "list registered projects")
   .action(async (alias: string | undefined, options: CliOptions) => {
+    await migrateRegistry();
+
     const activeFlags = [
       options.check,
       options.doctor,
