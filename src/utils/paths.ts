@@ -22,11 +22,17 @@ function resolveOverride(value: string | undefined, fallback: string): string {
   return value && path.isAbsolute(value) ? value : fallback;
 }
 
+export function getConfigBaseDir(): string {
+  return resolveOverride(process.env.XDG_CONFIG_HOME, path.join(homedir(), ".config"));
+}
+
 export function getConfigDir(): string {
-  return path.join(
-    resolveOverride(process.env.XDG_CONFIG_HOME, path.join(homedir(), ".config")),
-    "runit",
-  );
+  return path.join(getConfigBaseDir(), "spinup");
+}
+
+/** Where the registry lived before the tool was renamed from runit. */
+export function getLegacyConfigDir(): string {
+  return path.join(getConfigBaseDir(), "runit");
 }
 
 export function getRegistryPath(): string {
@@ -34,5 +40,5 @@ export function getRegistryPath(): string {
 }
 
 export function getShimDir(): string {
-  return resolveOverride(process.env.RUNIT_SHIM_DIR, path.join(homedir(), ".local", "bin"));
+  return resolveOverride(process.env.SPINUP_SHIM_DIR ?? process.env.RUNIT_SHIM_DIR, path.join(homedir(), ".local", "bin"));
 }

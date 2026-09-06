@@ -3,13 +3,13 @@
 set -euo pipefail
 
 OWNER="PedroElizalde01"
-REPO="runit"
+REPO="runit"   # GitHub repository name; the installed binary is "spinup"
 INSTALL_DIR="${HOME}/.local/bin"
 VERSION=""
 
 usage() {
   cat <<'EOF'
-Install runit from GitHub Releases.
+Install spinup from GitHub Releases.
 
 Usage:
   install.sh [--version vX.Y.Z] [--bin-dir PATH]
@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "curl is required to install runit." >&2
+  echo "curl is required to install spinup." >&2
   exit 1
 fi
 
@@ -81,16 +81,16 @@ if [[ -z "${VERSION}" ]]; then
 fi
 
 if [[ -z "${VERSION}" ]]; then
-  echo "Unable to resolve the latest runit release." >&2
+  echo "Unable to resolve the latest spinup release." >&2
   exit 1
 fi
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-ASSET_NAME="runit-${OS}-${ARCH}"
+ASSET_NAME="spinup-${OS}-${ARCH}"
 DOWNLOAD_URL="https://github.com/${OWNER}/${REPO}/releases/download/${VERSION}/${ASSET_NAME}"
 TMP_DIR="$(mktemp -d)"
-TMP_FILE="${TMP_DIR}/runit"
+TMP_FILE="${TMP_DIR}/spinup"
 
 cleanup() {
   rm -rf "${TMP_DIR}"
@@ -100,12 +100,12 @@ trap cleanup EXIT
 
 mkdir -p "${INSTALL_DIR}"
 
-echo "Installing runit ${VERSION} for ${OS}/${ARCH}..."
+echo "Installing spinup ${VERSION} for ${OS}/${ARCH}..."
 curl -fL "${DOWNLOAD_URL}" -o "${TMP_FILE}"
 chmod +x "${TMP_FILE}"
-mv "${TMP_FILE}" "${INSTALL_DIR}/runit"
+mv "${TMP_FILE}" "${INSTALL_DIR}/spinup"
 
-echo "Installed to ${INSTALL_DIR}/runit"
+echo "Installed to ${INSTALL_DIR}/spinup"
 
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;

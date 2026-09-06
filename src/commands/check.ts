@@ -1,4 +1,4 @@
-import { configExists, formatConfigError, loadConfig } from "../core/config.ts";
+import { CONFIG_FILENAME, configExists, formatConfigError, loadConfig } from "../core/config.ts";
 import { detectProject } from "../core/detector.ts";
 import { checkTools, collectToolWarnings, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
 import { getProject } from "../core/registry.ts";
@@ -9,7 +9,7 @@ function requireRegisteredProjectMessage(alias: string): string {
 }
 
 function requireConfigMessage(alias: string): string {
-  return `.runit.yml not found\nRegenerate using:\n\nrunit ${alias} -r`;
+  return `${CONFIG_FILENAME} not found\nRegenerate using:\n\nspinup ${alias} -r`;
 }
 
 export async function checkProject(alias: string): Promise<void> {

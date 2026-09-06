@@ -2,10 +2,16 @@ import { confirm, input, select } from "@inquirer/prompts";
 
 import type { Action, Pane, RunitConfig, Task, Window } from "../types/config.ts";
 
+/**
+ * Carries the original task/pane so fields the prompts never touch -- env, delay,
+ * dependsOn -- survive a save. Rebuilding from name/cwd/cmd alone silently dropped
+ * them.
+ */
 type EditableService = {
   name: string;
   cwd: string;
   cmd: string;
+  source?: Task | Pane;
 };
 
 function getEditableWindow(action: Action): Window | undefined {
@@ -22,6 +28,7 @@ function extractServices(action: Action): EditableService[] {
       name: pane.name,
       cwd: pane.cwd,
       cmd: pane.cmd,
+      source: pane,
     }));
   }
 
@@ -29,7 +36,27 @@ function extractServices(action: Action): EditableService[] {
     name: task.name,
     cwd: task.cwd,
     cmd: task.cmd,
+    source: task,
   }));
+}
+
+/**
+ * Drops a dependency that points at a service the user just removed, so the result
+ * still validates.
+ */
+function pruneDependencies<T extends { name: string; dependsOn?: string[] }>(items: T[]): T[] {
+  const present = new Set(items.map((item) => item.name));
+
+  return items.map((item) => {
+    if (!item.dependsOn) {
+      return item;
+    }
+
+    const kept = item.dependsOn.filter((dependency) => present.has(dependency));
+    const { dependsOn: _dropped, ...rest } = item;
+
+    return (kept.length > 0 ? { ...rest, dependsOn: kept } : rest) as T;
+  });
 }
 
 function resolveTmuxLayout(serviceCount: number): string {
@@ -44,37 +71,39 @@ function resolveTmuxLayout(serviceCount: number): string {
   return "even-horizontal";
 }
 
+function toRunnable(service: EditableService): Task & Pane {
+  // Spread the original first so untouched fields are carried through unchanged.
+  return {
+    ...(service.source ?? {}),
+    name: service.name,
+    cwd: service.cwd,
+    cmd: service.cmd,
+  } as Task & Pane;
+}
+
 function applyServicesToAction(
   action: Action,
   services: EditableService[],
   mode: "simple" | "tmux",
 ): Action {
-  if (mode === "simple") {
-    const tasks: Task[] = services.map((service) => ({
-      name: service.name,
-      cwd: service.cwd,
-      cmd: service.cmd,
-    }));
+  const runnables = pruneDependencies(services.map(toRunnable));
 
+  if (mode === "simple") {
     return {
       mode: "simple",
-      tasks,
+      tasks: runnables,
     };
   }
 
+  const editedWindow = action.mode === "tmux" ? getEditableWindow(action) : undefined;
   const serviceWindow: Window = {
-    name: "services",
-    layout: resolveTmuxLayout(services.length),
-    panes: services.map(
-      (service): Pane => ({
-        name: service.name,
-        cwd: service.cwd,
-        cmd: service.cmd,
-      }),
-    ),
+    // Keep the window's own identity; only its panes were edited.
+    name: editedWindow?.name ?? "services",
+    layout: editedWindow?.layout ?? resolveTmuxLayout(services.length),
+    panes: runnables,
   };
 
-  const extraWindows = action.mode === "tmux" ? action.windows.filter((window) => window !== getEditableWindow(action)) : [];
+  const extraWindows = action.mode === "tmux" ? action.windows.filter((window) => window !== editedWindow) : [];
 
   return {
     mode: "tmux",

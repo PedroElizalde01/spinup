@@ -10,17 +10,34 @@ import { editProject } from "./commands/edit.ts";
 import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
 import { runProject } from "./commands/run.ts";
-import { migrateLegacyAliases } from "./core/registry.ts";
-import { createShim, reclaimLegacyShim } from "./core/shim.ts";
+import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
+import { createShim, isStaleShim, readShim, reclaimLegacyShim } from "./core/shim.ts";
 
 /**
  * Aliases registered before the format was enforced would otherwise report as
  * invalid rather than resolving. Rename them once, move their shims, and say so.
  */
+async function refreshStaleShims(): Promise<void> {
+  // Shims written before the rename still exec "runit", which no longer exists.
+  for (const alias of Object.keys(await listProjects())) {
+    if (!isCanonicalAlias(alias)) {
+      continue;
+    }
+
+    const contents = await readShim(alias);
+
+    if (contents !== undefined && isStaleShim(contents)) {
+      await createShim(alias);
+      process.stderr.write(`[migrate] updated the "${alias}" command for the spinup rename\n`);
+    }
+  }
+}
+
 async function migrateRegistry(): Promise<void> {
   const migrations = await migrateLegacyAliases();
 
   if (migrations.length === 0) {
+    await refreshStaleShims();
     return;
   }
 
@@ -36,6 +53,8 @@ async function migrateRegistry(): Promise<void> {
     await reclaimLegacyShim(migration.from);
     process.stderr.write(`[migrate] renamed alias "${migration.from}" to "${migration.to}"\n`);
   }
+
+  await refreshStaleShims();
 }
 
 type CliOptions = {
@@ -55,7 +74,7 @@ type CliOptions = {
 const program = new Command();
 
 program
-  .name("runit")
+  .name("spinup")
   .description("Run registered project environments from anywhere.")
   .version(packageJson.version, "-v, --version")
   // Unrecognized arguments were silently discarded, so shim-forwarded flags looked
@@ -70,7 +89,7 @@ program
   .option("--graph", "show service dependency graph")
   .option("--interactive", "use interactive prompts with --edit")
   .option("--plan", "preview the execution plan")
-  .option("-r, --regenerate", "re-scan the project and overwrite .runit.yml")
+  .option("-r, --regenerate", "re-scan the project and overwrite the project config")
   .option("--remove", "remove a registered project and its shim")
   .option("--list", "list registered projects")
   .action(async (alias: string | undefined, options: CliOptions) => {

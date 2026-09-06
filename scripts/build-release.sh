@@ -7,15 +7,15 @@ TARGET=""
 
 usage() {
   cat <<'EOF'
-Build a standalone runit binary for the current host platform.
+Build a standalone spinup binary for the current host platform.
 
 Usage:
   scripts/build-release.sh [--output PATH] [--target TARGET]
 
 Examples:
   scripts/build-release.sh
-  scripts/build-release.sh --output dist/runit
-  scripts/build-release.sh --target bun-darwin-arm64 --output dist/runit-darwin-arm64
+  scripts/build-release.sh --output dist/spinup
+  scripts/build-release.sh --target bun-darwin-arm64 --output dist/spinup-darwin-arm64
 EOF
 }
 
@@ -106,7 +106,7 @@ if [[ "${OS}" == "windows" ]]; then
 fi
 
 if [[ -z "${OUTPUT}" ]]; then
-  OUTPUT="dist/runit-${OS}-${ARCH}${EXTENSION}"
+  OUTPUT="dist/spinup-${OS}-${ARCH}${EXTENSION}"
 fi
 
 mkdir -p "$(dirname "${OUTPUT}")"
@@ -114,7 +114,7 @@ mkdir -p "$(dirname "${OUTPUT}")"
 echo "Building ${OUTPUT}"
 
 # Bun autoloads .env and bunfig.toml from the *invocation* directory into compiled
-# executables by default. runit launches projects from anywhere, so that would leak
+# executables by default. spinup launches projects from anywhere, so that would leak
 # the caller's environment into an unrelated project's services. Always disable it.
 BUILD_ARGS=(
   src/cli.ts

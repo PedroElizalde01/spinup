@@ -1,4 +1,5 @@
 import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 import YAML from "yaml";
@@ -137,8 +138,22 @@ export function stringifyConfig(config: RunitConfig): string {
   return YAML.stringify(parsed);
 }
 
+export const CONFIG_FILENAME = ".spinup.yml";
+export const LEGACY_CONFIG_FILENAME = ".runit.yml";
+
+/**
+ * Prefers .spinup.yml but keeps using an existing .runit.yml in place, so projects
+ * written before the rename keep working and do not end up with two config files.
+ */
 export function getConfigPath(projectRoot: string): string {
-  return path.join(projectRoot, ".runit.yml");
+  const current = path.join(projectRoot, CONFIG_FILENAME);
+
+  if (existsSync(current)) {
+    return current;
+  }
+
+  const legacy = path.join(projectRoot, LEGACY_CONFIG_FILENAME);
+  return existsSync(legacy) ? legacy : current;
 }
 
 export async function configExists(projectRoot: string): Promise<boolean> {

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { configExists, getConfigPath, loadConfig, saveConfig, stringifyConfig } from "../core/config.ts";
+import { CONFIG_FILENAME, configExists, getConfigPath, loadConfig, saveConfig, stringifyConfig } from "../core/config.ts";
 import { buildDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
@@ -12,7 +12,7 @@ import { confirmAction } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
 import { createShim, getShimPath } from "../core/shim.ts";
-import type { Action, RunitConfig } from "../types/config.ts";
+import type { Action, Pane, RunitConfig, Task } from "../types/config.ts";
 
 type RunProjectOptions = {
   regenerate?: boolean;
@@ -84,30 +84,95 @@ async function scanAndGenerate(alias: string, projectRoot: string, options: Scan
   if (!options.quiet) {
     console.log("[scan] scanning project\n");
     logDetection(detection);
-    console.log("\n[config] generating optimized .runit.yml");
+    console.log(`\n[config] generating optimized ${CONFIG_FILENAME}`);
   }
 
   await saveConfig(projectRoot, config);
 
   if (!options.quiet) {
-    console.log("[config] generated .runit.yml\n");
+    console.log(`[config] generated ${CONFIG_FILENAME}\n`);
   }
 }
 
-function formatProposedChanges(currentConfig: string, nextConfig: string): string[] {
-  const currentLines = new Set(currentConfig.split("\n").map((line) => line.trim()).filter(Boolean));
-  const nextLines = new Set(nextConfig.split("\n").map((line) => line.trim()).filter(Boolean));
-  const changes: string[] = [];
+type ServiceShape = {
+  cwd: string;
+  cmd: string;
+  dependsOn: string;
+  delay: string;
+  env: string;
+};
 
-  for (const line of nextLines) {
-    if (!currentLines.has(line)) {
-      changes.push(`+ ${line}`);
+function describeService(item: Task | Pane): ServiceShape {
+  return {
+    cwd: item.cwd,
+    cmd: item.cmd,
+    dependsOn: (item.dependsOn ?? []).join(", ") || "none",
+    delay: item.delay === undefined ? "none" : String(item.delay),
+    env: Object.keys(item.env ?? {}).sort().join(", ") || "none",
+  };
+}
+
+function collectServices(action: Action): Map<string, ServiceShape> {
+  const items = action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
+  return new Map(items.map((item) => [item.name, describeService(item)]));
+}
+
+/**
+ * Compares configurations by structure. The previous implementation diffed sets of
+ * trimmed lines, which ignored ordering and collapsed duplicates: swapping the
+ * commands of two services produced an empty result, so a real change was reported
+ * as "no changes" and never applied.
+ */
+export function formatProposedChanges(current: RunitConfig, next: RunitConfig): string[] {
+  const changes: string[] = [];
+  const actionNames = [...new Set([...Object.keys(current.actions), ...Object.keys(next.actions)])].sort();
+
+  for (const key of ["name", "root", "default"] as const) {
+    if (current[key] !== next[key]) {
+      changes.push(`~ ${key}: ${current[key]} -> ${next[key]}`);
     }
   }
 
-  for (const line of currentLines) {
-    if (!nextLines.has(line)) {
-      changes.push(`- ${line}`);
+  for (const actionName of actionNames) {
+    const currentAction = current.actions[actionName];
+    const nextAction = next.actions[actionName];
+
+    if (!currentAction) {
+      changes.push(`+ action ${actionName}`);
+      continue;
+    }
+
+    if (!nextAction) {
+      changes.push(`- action ${actionName} (removed; any customization is lost)`);
+      continue;
+    }
+
+    if (currentAction.mode !== nextAction.mode) {
+      changes.push(`~ action ${actionName}: mode ${currentAction.mode} -> ${nextAction.mode}`);
+    }
+
+    const currentServices = collectServices(currentAction);
+    const nextServices = collectServices(nextAction);
+
+    for (const [name, nextShape] of nextServices) {
+      const currentShape = currentServices.get(name);
+
+      if (!currentShape) {
+        changes.push(`+ ${actionName}.${name} -> ${nextShape.cmd} (${nextShape.cwd})`);
+        continue;
+      }
+
+      for (const field of Object.keys(nextShape) as Array<keyof ServiceShape>) {
+        if (currentShape[field] !== nextShape[field]) {
+          changes.push(`~ ${actionName}.${name}.${field}: ${currentShape[field]} -> ${nextShape[field]}`);
+        }
+      }
+    }
+
+    for (const name of currentServices.keys()) {
+      if (!nextServices.has(name)) {
+        changes.push(`- ${actionName}.${name}`);
+      }
     }
   }
 
@@ -118,17 +183,23 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
   const nextConfig = generateConfig(scanResult, alias);
-  const nextYaml = stringifyConfig(nextConfig);
   const currentYaml = await readFile(getConfigPath(projectRoot), "utf8");
-  const diffLines = formatProposedChanges(currentYaml, nextYaml);
+  const currentConfig = await loadConfig(projectRoot);
+  const diffLines = formatProposedChanges(currentConfig, nextConfig);
+  const identical = stringifyConfig(nextConfig) === currentYaml;
 
   console.log("[scan] scanning project\n");
   logDetection(detection);
   console.log("\n[config] proposed changes:\n");
 
   if (diffLines.length === 0) {
-    console.log("(no changes)\n");
-    return;
+    // Structurally equal, but the file may still differ in comments or formatting;
+    // regeneration would discard those, so say so rather than claiming no changes.
+    console.log(identical ? "(no changes)\n" : "(no structural changes; regenerating would still rewrite comments and formatting)\n");
+
+    if (identical) {
+      return;
+    }
   }
 
   for (const line of diffLines) {
@@ -143,7 +214,7 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   }
 
   await saveConfig(projectRoot, nextConfig);
-  console.log("[config] updated .runit.yml\n");
+  console.log(`[config] updated ${CONFIG_FILENAME}\n`);
 }
 
 async function bootstrapProject(

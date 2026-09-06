@@ -1,12 +1,14 @@
 import { open, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { getConfigDir, getRegistryPath } from "../utils/paths.ts";
+import { getConfigDir, getLegacyConfigDir, getRegistryPath } from "../utils/paths.ts";
 
 type ProjectRegistry = Record<string, string>;
 
-const RESERVED_ALIASES = new Set(["runit"]);
+// "runit" stays reserved so shims from before the rename cannot be re-registered.
+const RESERVED_ALIASES = new Set(["spinup", "runit"]);
 
 // Deliberately narrow: no path separators, no shell metacharacters, and no "." or
 // ":" so an alias can never be mistaken for a tmux target (session:window.pane).
@@ -65,7 +67,27 @@ export function sanitizeLegacyAlias(alias: string): string | undefined {
   return isCanonicalAlias(candidate) ? candidate : undefined;
 }
 
+/**
+ * Adopts the registry from the pre-rename location. Only runs when the new
+ * directory does not exist yet, so it can never clobber current state.
+ */
+async function adoptLegacyConfigDir(): Promise<void> {
+  const configDir = getConfigDir();
+  const legacyDir = getLegacyConfigDir();
+
+  if (configDir === legacyDir || existsSync(configDir) || !existsSync(legacyDir)) {
+    return;
+  }
+
+  try {
+    await rename(legacyDir, configDir);
+  } catch {
+    // A cross-device or permission failure just means starting fresh.
+  }
+}
+
 async function ensureRegistryDir(): Promise<void> {
+  await adoptLegacyConfigDir();
   await mkdir(getConfigDir(), { recursive: true });
 }
 
@@ -111,8 +133,8 @@ async function withRegistryLock<T>(operation: () => Promise<T>): Promise<T> {
 
       if (Date.now() > deadline && !(await removeStaleLock(lockPath))) {
         throw new Error(
-          `Timed out waiting for the runit registry lock at ${lockPath}.\n` +
-            "Another runit process may be running. Remove that file if it is stale.",
+          `Timed out waiting for the spinup registry lock at ${lockPath}.\n` +
+            "Another spinup process may be running. Remove that file if it is stale.",
         );
       }
 

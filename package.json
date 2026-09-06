@@ -1,16 +1,16 @@
 {
-  "name": "runit",
+  "name": "spinup",
   "version": "0.2.2",
-  "description": "Production-grade developer CLI for launching project environments from anywhere.",
+  "description": "Developer CLI that detects a project and launches its dev environment from anywhere.",
   "type": "module",
   "bin": {
-    "runit": "src/cli.ts"
+    "spinup": "src/cli.ts"
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
     "check": "tsc --noEmit",
     "test": "bun test",
-    "build": "bash scripts/build-release.sh --output dist/runit",
+    "build": "bash scripts/build-release.sh --output dist/spinup",
     "build:release": "bash scripts/build-release.sh"
   },
   "dependencies": {
@@ -24,5 +24,6 @@
   "devDependencies": {
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2"
-  }
+  },
+  "license": "MIT"
 }

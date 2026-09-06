@@ -1,14 +1,10 @@
-import { readFile } from "node:fs/promises";
-
 import { execa } from "execa";
 
-import { configExists, formatConfigError, getConfigPath, loadConfig, saveConfig, stringifyConfig } from "../core/config.ts";
-import { detectProject } from "../core/detector.ts";
+import { CONFIG_FILENAME, configExists, formatConfigError, getConfigPath, loadConfig, saveConfig } from "../core/config.ts";
 import { validateConfigPaths } from "../core/health.ts";
 import { promptForConfigEdits } from "../core/interactive.ts";
 import { getProject } from "../core/registry.ts";
-import { scanProject } from "../core/scanner.ts";
-import type { Action, RunitConfig } from "../types/config.ts";
+import type { RunitConfig } from "../types/config.ts";
 
 type EditProjectOptions = {
   interactive?: boolean;
@@ -19,65 +15,33 @@ function requireRegisteredProjectMessage(alias: string): string {
 }
 
 function requireConfigMessage(alias: string): string {
-  return `.runit.yml not found\nRegenerate using:\n\nrunit ${alias} -r`;
+  return `${CONFIG_FILENAME} not found\nRegenerate using:\n\nspinup ${alias} -r`;
 }
 
-function buildFallbackCommand(packageManager?: string): string {
-  switch (packageManager) {
-    case "pnpm":
-      return "pnpm start";
-    case "yarn":
-      return "yarn start";
-    case "bun":
-      return "bun run start";
-    default:
-      return "npm start";
+function printWarnings(warnings: string[]): void {
+  if (warnings.length === 0) {
+    return;
+  }
+
+  console.log("\nWarnings:");
+
+  for (const warning of warnings) {
+    console.log(warning);
   }
 }
 
-function applyActionFallbacks(action: Action, fallbackCommand: string): Action {
-  if (action.mode === "tmux") {
-    return {
-      ...action,
-      windows: action.windows.map((window) => ({
-        ...window,
-        panes: window.panes.map((pane) => ({
-          ...pane,
-          cmd: pane.cmd || fallbackCommand,
-        })),
-      })),
-    };
-  }
-
-  return {
-    ...action,
-    tasks: (action.tasks ?? []).map((task) => ({
-      ...task,
-      cmd: task.cmd || fallbackCommand,
-    })),
-  };
+function quoteForShell(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-async function applyAutoFixes(projectRoot: string, config: RunitConfig): Promise<{ config: RunitConfig; warnings: string[] }> {
-  const detection = detectProject(await scanProject(projectRoot));
-  const fallbackCommand = buildFallbackCommand(detection.packageManager);
-  const nextConfig: RunitConfig = {
-    ...config,
-    actions: Object.fromEntries(
-      Object.entries(config.actions).map(([name, action]) => [name, applyActionFallbacks(action, fallbackCommand)]),
-    ),
-  };
-  const warnings = await validateConfigPaths(projectRoot, nextConfig);
-
-  return {
-    config: nextConfig,
-    warnings,
-  };
-}
-
+/**
+ * $EDITOR conventionally carries arguments ("code --wait", "emacsclient -nw"), so
+ * it is a shell word list rather than one executable name. git resolves it the same
+ * way; treating it as a bare filename failed with ENOENT.
+ */
 async function openInEditor(configPath: string): Promise<void> {
-  const editor = process.env.EDITOR || "nano";
-  await execa(editor, [configPath], { stdio: "inherit" });
+  const editor = process.env.VISUAL || process.env.EDITOR || "nano";
+  await execa(`${editor} ${quoteForShell(configPath)}`, { shell: true, stdio: "inherit" });
 }
 
 export async function editProject(alias: string, options: EditProjectOptions = {}): Promise<void> {
@@ -96,26 +60,17 @@ export async function editProject(alias: string, options: EditProjectOptions = {
   if (!options.interactive) {
     await openInEditor(configPath);
 
+    // Validate what the user wrote, but never write it back. Reserializing a valid
+    // file stripped comments and reflowed inline collections even on a no-op edit.
+    let config: RunitConfig;
+
     try {
-      const raw = await readFile(configPath, "utf8");
-      const config = await loadConfig(projectRoot);
-      const fixed = await applyAutoFixes(projectRoot, config);
-
-      if (stringifyConfig(fixed.config) !== raw) {
-        await saveConfig(projectRoot, fixed.config);
-      }
-
-      if (fixed.warnings.length > 0) {
-        console.log("\nWarnings:");
-
-        for (const warning of fixed.warnings) {
-          console.log(warning);
-        }
-      }
+      config = await loadConfig(projectRoot);
     } catch (error) {
       throw new Error(formatConfigError(error));
     }
 
+    printWarnings(await validateConfigPaths(projectRoot, config));
     return;
   }
 
@@ -135,19 +90,12 @@ export async function editProject(alias: string, options: EditProjectOptions = {
   }
 
   try {
-    const fixed = await applyAutoFixes(projectRoot, updatedConfig);
-    await saveConfig(projectRoot, fixed.config);
-
-    if (fixed.warnings.length > 0) {
-      console.log("\nWarnings:");
-
-      for (const warning of fixed.warnings) {
-        console.log(warning);
-      }
-    }
+    await saveConfig(projectRoot, updatedConfig);
   } catch (error) {
     throw new Error(formatConfigError(error));
   }
+
+  printWarnings(await validateConfigPaths(projectRoot, updatedConfig));
 
   console.log(`Updated ${configPath}`);
 }

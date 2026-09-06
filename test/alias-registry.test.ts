@@ -16,7 +16,7 @@ import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 const tempDirs: string[] = [];
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
-const originalShimDir = process.env.RUNIT_SHIM_DIR;
+const originalShimDir = process.env.SPINUP_SHIM_DIR;
 
 async function isolate(): Promise<{ configHome: string; shimDir: string }> {
   const root = await makeTempDir("runit-registry-");
@@ -28,21 +28,21 @@ async function isolate(): Promise<{ configHome: string; shimDir: string }> {
   await mkdir(shimDir, { recursive: true });
 
   process.env.XDG_CONFIG_HOME = configHome;
-  process.env.RUNIT_SHIM_DIR = shimDir;
+  process.env.SPINUP_SHIM_DIR = shimDir;
 
   return { configHome, shimDir };
 }
 
 afterEach(async () => {
   process.env.XDG_CONFIG_HOME = originalConfigHome;
-  process.env.RUNIT_SHIM_DIR = originalShimDir;
+  process.env.SPINUP_SHIM_DIR = originalShimDir;
 
   if (originalConfigHome === undefined) {
     delete process.env.XDG_CONFIG_HOME;
   }
 
   if (originalShimDir === undefined) {
-    delete process.env.RUNIT_SHIM_DIR;
+    delete process.env.SPINUP_SHIM_DIR;
   }
 
   await Promise.all(tempDirs.splice(0).map((dir) => cleanupTempDir(dir)));
@@ -116,8 +116,8 @@ describe("shim ownership", () => {
     await createShim("ownshim");
 
     const contents = await readFile(getShimPath("ownshim"), "utf8");
-    expect(contents).toContain("runit-shim");
-    expect(contents).toContain('runit --start "ownshim"');
+    expect(contents).toContain("spinup-shim");
+    expect(contents).toContain('spinup --start "ownshim"');
 
     await removeShim("ownshim");
     await expect(readFile(getShimPath("ownshim"), "utf8")).rejects.toThrow();
@@ -154,7 +154,7 @@ describe("registry durability", () => {
     tempDirs.push(root);
 
     await registerProject("xdgtest", root);
-    expect(await readFile(path.join(configHome, "runit", "projects.json"), "utf8")).toContain("xdgtest");
+    expect(await readFile(path.join(configHome, "spinup", "projects.json"), "utf8")).toContain("xdgtest");
 
     // The XDG spec says a relative value must be ignored, not resolved against cwd.
     process.env.XDG_CONFIG_HOME = "relative/path";
@@ -164,7 +164,7 @@ describe("registry durability", () => {
 
 describe("legacy alias migration", () => {
   async function seedLegacyRegistry(configHome: string, registry: Record<string, string>): Promise<void> {
-    const dir = path.join(configHome, "runit");
+    const dir = path.join(configHome, "spinup");
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, "projects.json"), `${JSON.stringify(registry, null, 2)}\n`, "utf8");
   }

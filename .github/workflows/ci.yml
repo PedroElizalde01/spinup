@@ -64,12 +64,12 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build standalone binary
-        run: bash scripts/build-release.sh --output dist/runit
+        run: bash scripts/build-release.sh --output dist/spinup
 
       - name: Binary reports help and a version
         run: |
-          ./dist/runit --help
-          version="$(./dist/runit --version)"
+          ./dist/spinup --help
+          version="$(./dist/spinup --version)"
           expected="$(node -p 'require("./package.json").version')"
           if [ "${version}" != "${expected}" ]; then
             echo "binary reports '${version}', package.json says '${expected}'" >&2
@@ -82,11 +82,11 @@ jobs:
       - name: Binary ignores caller-directory dotenv
         run: |
           set -euo pipefail
-          bin="${GITHUB_WORKSPACE}/dist/runit"
+          bin="${GITHUB_WORKSPACE}/dist/spinup"
           root="$(mktemp -d)"
           mkdir -p "${root}/caller" "${root}/project" "${root}/home"
           echo "RUNIT_LEAK_CANARY=leaked" > "${root}/caller/.env"
-          cat > "${root}/project/.runit.yml" <<'CONFIG'
+          cat > "${root}/project/.spinup.yml" <<'CONFIG'
           name: canary
           root: .
           default: dev

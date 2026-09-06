@@ -4,9 +4,15 @@ import path from "node:path";
 import { validateAlias } from "./registry.ts";
 import { getShimDir } from "../utils/paths.ts";
 
-// Identifies a file as ours, so runit never overwrites or deletes something a user
-// put in their bin directory under the same name.
-const SHIM_MARKER = "# runit-shim v1";
+// Identifies a file as ours, so spinup never overwrites or deletes something a user
+// put in their bin directory under the same name. The runit marker is still
+// recognized so shims written before the rename remain ours to manage.
+const SHIM_MARKER = "# spinup-shim v1";
+const LEGACY_SHIM_MARKERS = ["# runit-shim v1"];
+
+function hasShimMarker(contents: string): boolean {
+  return contents.includes(SHIM_MARKER) || LEGACY_SHIM_MARKERS.some((marker) => contents.includes(marker));
+}
 
 export function getShimPath(alias: string): string {
   const normalizedAlias = validateAlias(alias);
@@ -23,7 +29,12 @@ export function getShimPath(alias: string): string {
 }
 
 function buildShimContents(alias: string): string {
-  return `#!/usr/bin/env bash\n${SHIM_MARKER}\nexec runit --start "${alias}" "$@"\n`;
+  return `#!/usr/bin/env bash\n${SHIM_MARKER}\nexec spinup --start "${alias}" "$@"\n`;
+}
+
+/** True when a shim still points at the pre-rename executable. */
+export function isStaleShim(contents: string): boolean {
+  return hasShimMarker(contents) && !contents.includes('exec spinup --start');
 }
 
 async function readIfExists(target: string): Promise<string | undefined> {
@@ -38,9 +49,13 @@ async function readIfExists(target: string): Promise<string | undefined> {
   }
 }
 
-async function isRunitShim(target: string): Promise<boolean> {
+async function isOwnedShim(target: string): Promise<boolean> {
   const contents = await readIfExists(target);
-  return contents !== undefined && contents.includes(SHIM_MARKER);
+  return contents !== undefined && hasShimMarker(contents);
+}
+
+export async function readShim(alias: string): Promise<string | undefined> {
+  return readIfExists(getShimPath(alias));
 }
 
 /**
@@ -74,10 +89,10 @@ export async function createShim(alias: string): Promise<void> {
 
   const existing = await readIfExists(shimPath);
 
-  if (existing !== undefined && !existing.includes(SHIM_MARKER)) {
+  if (existing !== undefined && !hasShimMarker(existing)) {
     throw new Error(
       `Refusing to overwrite ${shimPath}.\n` +
-        "That file already exists and was not created by runit. Choose a different alias.",
+        "That file already exists and was not created by spinup. Choose a different alias.",
     );
   }
 
@@ -106,7 +121,7 @@ export async function reclaimLegacyShim(rawName: string): Promise<boolean> {
   const shimDir = path.resolve(getShimDir());
   const candidate = path.resolve(path.join(shimDir, path.basename(rawName)));
 
-  if (path.dirname(candidate) !== shimDir || !(await isRunitShim(candidate))) {
+  if (path.dirname(candidate) !== shimDir || !(await isOwnedShim(candidate))) {
     return false;
   }
 
@@ -117,8 +132,8 @@ export async function reclaimLegacyShim(rawName: string): Promise<boolean> {
 export async function removeShim(alias: string): Promise<void> {
   const shimPath = getShimPath(alias);
 
-  // Only reclaim files runit created. A same-named file the user owns stays put.
-  if (!(await isRunitShim(shimPath))) {
+  // Only reclaim files spinup created. A same-named file the user owns stays put.
+  if (!(await isOwnedShim(shimPath))) {
     return;
   }
 

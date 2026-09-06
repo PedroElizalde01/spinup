@@ -61,7 +61,7 @@ export async function ensureTmuxInstalled(): Promise<void> {
 
   if (!Number.isNaN(parsed) && parsed < MINIMUM_TMUX_VERSION) {
     throw new Error(
-      `runit needs tmux ${MINIMUM_TMUX_VERSION} or newer for its workspace mode, found "${version}".\n` +
+      `spinup needs tmux ${MINIMUM_TMUX_VERSION} or newer for its workspace mode, found "${version}".\n` +
         'Upgrade tmux or change the action mode to "simple".',
     );
   }
