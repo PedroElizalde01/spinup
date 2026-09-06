@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { CONFIG_FILENAME, configExists, formatConfigError, getConfigPath, loadConfig } from "../core/config.ts";
 import { visualizeDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
@@ -126,20 +128,34 @@ export async function previewProjectEnv(alias: string): Promise<void> {
 
   try {
     const config = await loadConfig(projectRoot);
-    const env = await loadEnv(projectRoot, config.default);
+    const env = await loadEnv(path.resolve(projectRoot, config.root), config.default);
 
     printBanner("Environment");
-    console.log("Loaded environment variables:\n");
+    console.log(`Action: ${config.default}`);
+    console.log(`Files:  ${env.files.length > 0 ? env.files.join(", ") : "(none)"}\n`);
+
+    for (const ignoredFile of env.ignored) {
+      console.log(`${ignoredFile} is present but not read by action "${config.default}".`);
+    }
+
+    if (env.ignored.length > 0) {
+      console.log("");
+    }
 
     const entries = Object.keys(env.values).sort((left, right) => left.localeCompare(right));
 
     if (entries.length === 0) {
-      console.log("(none)");
+      console.log("(no variables)");
       return;
     }
 
+    console.log("Loaded environment variables:\n");
+
+    // Values stay masked; only the key and where it came from are shown.
     for (const key of entries) {
-      console.log(`${key}=***`);
+      const origin = env.origins[key];
+      const note = env.shadowed.includes(key) ? " (overridden by the shell)" : "";
+      console.log(`${key}=*** [${origin}]${note}`);
     }
   } catch (error) {
     throw new Error(formatConfigError(error));
@@ -169,9 +185,15 @@ export async function doctorProject(alias: string): Promise<void> {
 
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
-  const tools = await checkTools(["tmux", "docker", ...inferRequiredTools(config, detection)]);
+  const actionName = config.default;
+  const requiredTools = inferRequiredTools(config, detection, actionName);
+  const tools = await checkTools([...new Set(["tmux", "docker", ...requiredTools])]);
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
-  const warnings = await validateConfigPaths(projectRoot, config);
+  const missingRequired = requiredTools.filter((name) => toolMap.get(name)?.installed !== true);
+  const warnings = [
+    ...(await validateConfigPaths(projectRoot, config, actionName)),
+    ...missingRequired.map((name) => `${name} is required by action "${actionName}" but is not installed.`),
+  ];
   const configuredServices = getDefaultActionItems(config).map((item) => item.name);
 
   printBanner("Project Doctor");
@@ -195,7 +217,7 @@ export async function doctorProject(alias: string): Promise<void> {
     console.log(`  ${detection.packageManager}\n`);
   }
 
-  console.log("Tmux:");
+  console.log(`Tmux: ${requiredTools.includes("tmux") ? "required" : "not required"}`);
   console.log(`  installed ${formatCheck(toolMap.get("tmux")?.installed === true)}\n`);
 
   console.log("Docker:");
@@ -206,11 +228,13 @@ export async function doctorProject(alias: string): Promise<void> {
   }
 
   console.log("Status:");
-  console.log(`  ${warnings.length === 0 ? "ready" : "warnings"}`);
+  // "ready" previously ignored missing required tools entirely.
+  console.log(`  ${warnings.length === 0 ? "ready" : "not ready"}`);
 
   if (warnings.length > 0) {
-    console.log("\nWarnings:");
+    console.log("\nProblems:");
     printList(warnings);
+    process.exitCode = 1;
   }
 
   console.log(`\nDefault action services: ${getActionServiceCount(config.actions[config.default])}`);

@@ -1,6 +1,6 @@
 import { CONFIG_FILENAME, configExists, formatConfigError, loadConfig } from "../core/config.ts";
 import { detectProject } from "../core/detector.ts";
-import { checkTools, collectToolWarnings, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
+import { checkDocker, checkTools, collectToolWarnings, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
 import { getProject } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
 
@@ -33,25 +33,51 @@ export async function checkProject(alias: string): Promise<void> {
 
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
-  const tools = await checkTools(inferRequiredTools(config, detection));
-  const warnings = [
-    ...collectToolWarnings(detection, tools),
-    ...(await validateConfigPaths(projectRoot, config)),
-  ];
+  const actionName = config.default;
+  const tools = await checkTools(inferRequiredTools(config, detection, actionName));
+  const pathProblems = await validateConfigPaths(projectRoot, config, actionName);
+  const toolProblems = collectToolWarnings(detection, tools);
+  const docker = tools.some((tool) => tool.name === "docker") ? await checkDocker() : undefined;
 
   console.log("+--------------------+");
   console.log("| Environment Check  |");
   console.log("+--------------------+\n");
 
+  console.log(`Action: ${actionName}\n`);
+
   for (const tool of tools) {
-    console.log(`${tool.name} ${tool.installed ? "✓" : "✗"}`);
+    const resolved = tool.resolvedCommand && tool.resolvedCommand !== tool.name ? ` (${tool.resolvedCommand})` : "";
+    console.log(`${tool.name}${resolved} ${tool.installed ? "✓" : "✗"}`);
   }
 
-  if (warnings.length > 0) {
-    console.log("\nWarnings:");
+  if (docker?.cli) {
+    console.log(`docker compose ${docker.compose ? "✓" : "✗"}`);
+    console.log(`docker daemon ${docker.daemon ? "✓" : "✗"}`);
+  }
 
-    for (const warning of warnings) {
-      console.log(warning);
+  if (docker?.cli && !docker.compose) {
+    toolProblems.push("The Docker CLI is installed but the Compose plugin is not.");
+  }
+
+  if (docker?.cli && !docker.daemon) {
+    toolProblems.push("The Docker daemon is not reachable.");
+  }
+
+  const problems = [...toolProblems, ...pathProblems];
+
+  if (problems.length > 0) {
+    console.log("\nProblems:");
+
+    for (const problem of problems) {
+      console.log(`  ${problem}`);
     }
+
+    // A diagnostic that reports a broken environment must not exit 0; scripts and
+    // CI rely on the status, not the text.
+    console.log(`\n${problems.length} problem(s) found.`);
+    process.exitCode = 1;
+    return;
   }
+
+  console.log("\nReady.");
 }

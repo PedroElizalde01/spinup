@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Environment precedence is defined and documented. A value set in the invoking
+  shell now wins over an environment file, and a task's own `env:` block wins over
+  both. Files were previously applied on top of the shell, so an explicit
+  `PORT=4000 my-app` was silently discarded.
+- `.env.development` is no longer read for every action. It was applied even to a
+  `build` action, conflating an action with a deployment mode. Files are now
+  `.env`, `.env.local`, `.env.<action>`, `.env.<action>.local`, and a mode file for
+  a different action is reported as skipped instead of being ignored in silence.
+- Environment files resolve against the action's `root` rather than the directory
+  the project was registered from.
+- `loadEnv` no longer mutates the parent process environment, so `--env` cannot
+  change how a later command runs.
+- `--check` and `--doctor` exit non-zero when the project cannot run. Both reported
+  success while printing the failure: `--check` exited 0 with a missing working
+  directory, and `--doctor` printed `ready` with a required tool absent.
+- A working directory that exists but is a regular file is now reported. `access()`
+  succeeds for a file, so such a config passed validation.
+- Tool requirements are inferred from the action that will actually run, instead of
+  every action in the file, which demanded tmux from projects that never use it.
+- `python` is probed as `python3` first, removing a false negative on the many
+  distributions that ship no `python` executable.
+- The Docker CLI, the Compose plugin, and a reachable daemon are checked separately.
+  `docker -v` proved only the first.
+- Tool probes are bounded by a timeout so a diagnostic cannot hang.
+
+### Changed
+
+- `--env` reports the action, which files were read, the origin of each key, and
+  which keys the shell is overriding. Values remain masked.
+
 ## [0.3.0] - 2026-09-06
 
 ### Renamed
@@ -110,10 +144,7 @@ Carried over from v0.2.2 and tracked in `RUNIT_REVIEW.md`:
 - Generated `docker`, `prisma-generate`, and `prisma-migrate` actions still cannot be
   selected; every start path uses the default action (F18).
 - `dependsOn` orders startup only; it does not wait for readiness (F10).
-- `--check` and `--doctor` can report success for an environment that cannot run
-  (F16), and `--graph` draws edges between independent services (F17).
-- `loadEnv` still mutates the parent process environment and always reads
-  `.env.development` regardless of the action (F15).
+- `--graph` draws edges between independent services (F17).
 
 ## [0.2.2] - 2026-03-14
 

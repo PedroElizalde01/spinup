@@ -415,9 +415,23 @@ function printSetupCard(
 async function startConfiguredProject(alias: string, projectRoot: string): Promise<void> {
   const config = await loadConfig(projectRoot);
   const action = config.actions[config.default];
-  const env = await loadEnv(projectRoot, config.default);
+  // Environment files live next to the action's root, not necessarily the
+  // directory the project was registered from.
+  const env = await loadEnv(path.resolve(projectRoot, config.root), config.default);
 
-  console.log("[env] loading environment variables");
+  console.log(
+    env.files.length > 0
+      ? `[env] loaded ${env.files.join(", ")}`
+      : "[env] no environment files found",
+  );
+
+  for (const ignoredFile of env.ignored) {
+    console.log(`[env] ignoring ${ignoredFile}; it is only read by an action of that name`);
+  }
+
+  if (env.shadowed.length > 0) {
+    console.log(`[env] kept shell values for ${env.shadowed.join(", ")}`);
+  }
 
   if (action.mode === "simple") {
     buildDependencyGraph(action.tasks ?? []);
@@ -430,7 +444,7 @@ async function startConfiguredProject(alias: string, projectRoot: string): Promi
   }
 
   await executeAction(projectRoot, config, config.default, {
-    environment: env.values,
+    environment: env.applied,
     sessionName: alias,
   });
 }

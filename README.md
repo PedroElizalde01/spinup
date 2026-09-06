@@ -466,10 +466,26 @@ Pushing a `v*` tag triggers GitHub Actions to build release binaries and publish
 spec requires. `SPINUP_SHIM_DIR` relocates generated commands, which is mainly useful
 for testing.
 
-Environment files are read from the project root in this order, with later files
-winning: `.env`, `.env.local`, `.env.development`, `.env.<action>`. Values are passed
-to each service directly, never echoed into a terminal. Use `spinup <alias> --env` to
-see which keys are loaded, with values masked.
+Environment files are read from the action's root (`root` in the config) in this
+order, with later files winning:
+
+```
+.env  ->  .env.local  ->  .env.<action>  ->  .env.<action>.local
+```
+
+`<action>` is the action's own name, so a `dev` action reads `.env.dev`. A file for
+a different action, such as `.env.production` while running `dev`, is reported as
+skipped rather than silently ignored.
+
+Precedence, highest first:
+
+1. A task's own `env:` block in the config
+2. A value already set in the invoking shell, e.g. `PORT=4000 my-app`
+3. The environment files above
+
+Values are passed to each service directly and never echoed into a terminal. Use
+`spinup <alias> --env` to see which keys are loaded, which file each came from, and
+which are being overridden by your shell. Values stay masked.
 
 ## Config
 

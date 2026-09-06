@@ -1,38 +1,55 @@
-import { access } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 
 import { execa } from "execa";
 
 import type { ProjectDetection } from "./detectors/types.ts";
-import type { Pane, RunitConfig, Task } from "../types/config.ts";
+import type { Action, Pane, RunitConfig, Task } from "../types/config.ts";
 
 export type ToolCheck = {
   name: string;
   installed: boolean;
+  /** Which candidate satisfied the check, e.g. "python3" for "python". */
+  resolvedCommand?: string;
   version?: string;
 };
 
 type ToolDefinition = {
-  command: string;
+  /** Tried in order; the first that responds satisfies the check. */
+  commands: string[];
   args: string[];
 };
 
+// A probe must not hang a diagnostic command.
+const TOOL_PROBE_TIMEOUT_MS = 5000;
+
 const TOOL_COMMANDS: Record<string, ToolDefinition> = {
-  tmux: { command: "tmux", args: ["-V"] },
-  docker: { command: "docker", args: ["-v"] },
-  node: { command: "node", args: ["-v"] },
-  python: { command: "python", args: ["-V"] },
-  npm: { command: "npm", args: ["-v"] },
-  pnpm: { command: "pnpm", args: ["-v"] },
-  yarn: { command: "yarn", args: ["-v"] },
-  bun: { command: "bun", args: ["-v"] },
+  tmux: { commands: ["tmux"], args: ["-V"] },
+  docker: { commands: ["docker"], args: ["-v"] },
+  node: { commands: ["node"], args: ["-v"] },
+  // Many distributions ship only python3, so probing "python" alone reported a
+  // false negative on a perfectly working project.
+  python: { commands: ["python3", "python"], args: ["-V"] },
+  npm: { commands: ["npm"], args: ["-v"] },
+  pnpm: { commands: ["pnpm"], args: ["-v"] },
+  yarn: { commands: ["yarn"], args: ["-v"] },
+  bun: { commands: ["bun"], args: ["-v"] },
 };
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function getConfigEntries(config: RunitConfig): Array<Task | Pane> {
+function getActionEntries(action: Action): Array<Task | Pane> {
+  return action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
+}
+
+function getConfigEntries(config: RunitConfig, actionName?: string): Array<Task | Pane> {
+  if (actionName) {
+    const action = config.actions[actionName];
+    return action ? getActionEntries(action) : [];
+  }
+
   return Object.values(config.actions).flatMap((action) => {
     if (action.mode === "tmux") {
       return action.windows.flatMap((window) => window.panes);
@@ -42,8 +59,8 @@ function getConfigEntries(config: RunitConfig): Array<Task | Pane> {
   });
 }
 
-function getActionTaskPaths(config: RunitConfig): Array<{ name: string; cwd: string }> {
-  return getConfigEntries(config).map((entry) => ({
+function getActionTaskPaths(config: RunitConfig, actionName?: string): Array<{ name: string; cwd: string }> {
+  return getConfigEntries(config, actionName).map((entry) => ({
     name: entry.name,
     cwd: entry.cwd,
   }));
@@ -60,41 +77,89 @@ export async function checkTool(name: string): Promise<ToolCheck> {
     throw new Error(`Unknown tool check: ${name}`);
   }
 
-  try {
-    const result = await execa(definition.command, definition.args);
-    return {
-      name,
-      installed: true,
-      version: result.stdout.trim() || result.stderr.trim() || undefined,
-    };
-  } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
+  let lastError: unknown;
 
-    if (errorCode === "ENOENT") {
+  for (const command of definition.commands) {
+    try {
+      const result = await execa(command, definition.args, { timeout: TOOL_PROBE_TIMEOUT_MS });
       return {
         name,
-        installed: false,
+        resolvedCommand: command,
+        installed: true,
+        version: result.stdout.trim() || result.stderr.trim() || undefined,
       };
+    } catch (error) {
+      lastError = error;
     }
-
-    return {
-      name,
-      installed: false,
-      version: error instanceof Error ? error.message : undefined,
-    };
   }
+
+  return {
+    name,
+    installed: false,
+    version:
+      (lastError as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+        ? undefined
+        : lastError instanceof Error
+          ? lastError.message
+          : undefined,
+  };
+}
+
+/**
+ * The Docker CLI, the Compose plugin and a reachable daemon are three separate
+ * things. "docker -v" proves only the first, so a project needing Compose could
+ * report a clean check and then fail at launch.
+ */
+export type DockerCapability = {
+  cli: boolean;
+  compose: boolean;
+  daemon: boolean;
+};
+
+export async function checkDocker(): Promise<DockerCapability> {
+  const probe = async (args: string[]): Promise<boolean> => {
+    try {
+      await execa("docker", args, { timeout: TOOL_PROBE_TIMEOUT_MS });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const cli = await probe(["-v"]);
+
+  if (!cli) {
+    return { cli: false, compose: false, daemon: false };
+  }
+
+  return {
+    cli,
+    compose: await probe(["compose", "version"]),
+    daemon: await probe(["info", "--format", "{{.ServerVersion}}"]),
+  };
 }
 
 export async function checkTools(names: string[]): Promise<ToolCheck[]> {
   return Promise.all(unique(names).map((name) => checkTool(name)));
 }
 
-export function inferRequiredTools(config: RunitConfig, detection: ProjectDetection): string[] {
+/**
+ * Tools required by the action that will actually run. Considering every action in
+ * the file demanded tmux for a project whose selected action is `simple`.
+ */
+export function inferRequiredTools(
+  config: RunitConfig,
+  detection: ProjectDetection,
+  actionName?: string,
+): string[] {
   const tools = new Set<string>();
-  const entries = getConfigEntries(config);
+  const entries = getConfigEntries(config, actionName);
+  const actions = actionName
+    ? [config.actions[actionName]].filter(Boolean)
+    : Object.values(config.actions);
 
-  for (const action of Object.values(config.actions)) {
-    if (action.mode === "tmux") {
+  for (const action of actions) {
+    if (action?.mode === "tmux") {
       tools.add("tmux");
     }
   }
@@ -135,14 +200,23 @@ export function inferRequiredTools(config: RunitConfig, detection: ProjectDetect
   return [...tools];
 }
 
-export async function validateConfigPaths(projectRoot: string, config: RunitConfig): Promise<string[]> {
+export async function validateConfigPaths(
+  projectRoot: string,
+  config: RunitConfig,
+  actionName?: string,
+): Promise<string[]> {
   const warnings: string[] = [];
 
-  for (const task of getActionTaskPaths(config)) {
+  for (const task of getActionTaskPaths(config, actionName)) {
     const absolutePath = path.resolve(projectRoot, config.root, task.cwd);
 
     try {
-      await access(absolutePath);
+      // access() succeeds for a regular file, so a cwd pointing at one passed.
+      const stats = await stat(absolutePath);
+
+      if (!stats.isDirectory()) {
+        warnings.push(`Service "${task.name}" cwd is not a directory: ${task.cwd}`);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         warnings.push(`Service "${task.name}" cwd not found: ${task.cwd}`);
