@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import YAML from "yaml";
@@ -161,5 +161,18 @@ export async function loadConfig(projectRoot: string): Promise<RunitConfig> {
 }
 
 export async function saveConfig(projectRoot: string, config: RunitConfig): Promise<void> {
-  await writeFile(getConfigPath(projectRoot), stringifyConfig(config), "utf8");
+  const configPath = getConfigPath(projectRoot);
+  // Serialize before touching disk so a validation failure cannot truncate the
+  // existing file, then swap atomically so an interrupted write leaves either the
+  // old config or the new one, never a partial file.
+  const contents = stringifyConfig(config);
+  const temporaryPath = `${configPath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+
+  try {
+    await writeFile(temporaryPath, contents, "utf8");
+    await rename(temporaryPath, configPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
 }

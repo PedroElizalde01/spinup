@@ -13,8 +13,20 @@ export function expandHome(inputPath: string): string {
   return inputPath;
 }
 
+/**
+ * The XDG spec requires absolute paths and says a relative value must be ignored,
+ * so a stray relative override falls back to the default rather than resolving
+ * against whatever directory runit happened to be invoked from.
+ */
+function resolveOverride(value: string | undefined, fallback: string): string {
+  return value && path.isAbsolute(value) ? value : fallback;
+}
+
 export function getConfigDir(): string {
-  return path.join(homedir(), ".config", "runit");
+  return path.join(
+    resolveOverride(process.env.XDG_CONFIG_HOME, path.join(homedir(), ".config")),
+    "runit",
+  );
 }
 
 export function getRegistryPath(): string {
@@ -22,5 +34,5 @@ export function getRegistryPath(): string {
 }
 
 export function getShimDir(): string {
-  return path.join(homedir(), ".local", "bin");
+  return resolveOverride(process.env.RUNIT_SHIM_DIR, path.join(homedir(), ".local", "bin"));
 }

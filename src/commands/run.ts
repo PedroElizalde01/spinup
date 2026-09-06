@@ -156,14 +156,15 @@ async function bootstrapProject(
     await scanAndGenerate(alias, projectRoot, { quiet: options.quiet });
   }
 
-  await registerProject(alias, projectRoot);
-
+  // Create the shim first. It is the step that can legitimately refuse -- a name
+  // collision or a file runit does not own -- and registering beforehand would
+  // leave a successful-looking entry with no runnable command behind it.
   await createShim(alias);
+  await registerProject(alias, projectRoot);
 }
 
 async function ensureProjectReady(alias: string, options: RunProjectOptions): Promise<EnsureProjectReadyResult> {
-  validateAlias(alias);
-  const registeredProjectRoot = await getProject(alias);
+  const registeredProjectRoot = await getProject(validateAlias(alias));
   const projectRoot = registeredProjectRoot ? path.resolve(registeredProjectRoot) : process.cwd();
   const hasConfig = await configExists(projectRoot);
 

@@ -1,16 +1,31 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { open, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { getConfigDir, getRegistryPath } from "../utils/paths.ts";
 
 type ProjectRegistry = Record<string, string>;
+
 const RESERVED_ALIASES = new Set(["runit"]);
 
-function normalizeAlias(alias: string): string {
+// Deliberately narrow: no path separators, no shell metacharacters, and no "." or
+// ":" so an alias can never be mistaken for a tmux target (session:window.pane).
+const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+const LOCK_ACQUIRE_TIMEOUT_MS = 5000;
+const LOCK_RETRY_INTERVAL_MS = 25;
+const LOCK_STALE_AFTER_MS = 30_000;
+
+export function normalizeAlias(alias: string): string {
   return alias.trim().toLowerCase();
 }
 
-export function validateAlias(alias: string): void {
+/**
+ * Single source of truth for alias identity. Returns the canonical form so callers
+ * store, look up, and derive filenames from the same value -- previously validation
+ * lowercased only for its checks while the raw value was used everywhere else.
+ */
+export function validateAlias(alias: string): string {
   const normalizedAlias = normalizeAlias(alias);
 
   if (!normalizedAlias) {
@@ -20,64 +35,155 @@ export function validateAlias(alias: string): void {
   if (RESERVED_ALIASES.has(normalizedAlias)) {
     throw new Error(`Project alias "${alias}" is reserved. Choose a different alias.`);
   }
+
+  if (!ALIAS_PATTERN.test(normalizedAlias)) {
+    throw new Error(
+      `Invalid project alias "${alias}".\n` +
+        "Use lowercase letters, digits, - and _, starting with a letter or digit (max 64 characters).",
+    );
+  }
+
+  return normalizedAlias;
 }
 
 async function ensureRegistryDir(): Promise<void> {
   await mkdir(getConfigDir(), { recursive: true });
 }
 
-async function readRegistry(): Promise<ProjectRegistry> {
+async function removeStaleLock(lockPath: string): Promise<boolean> {
+  try {
+    const stats = await stat(lockPath);
+
+    if (Date.now() - stats.mtimeMs < LOCK_STALE_AFTER_MS) {
+      return false;
+    }
+
+    await rm(lockPath, { force: true });
+    return true;
+  } catch {
+    // Lock vanished on its own; the caller can retry immediately.
+    return true;
+  }
+}
+
+/**
+ * Serializes the whole read-modify-write. Atomic replacement alone only prevents a
+ * torn file -- concurrent registrations would still overwrite each other's entries.
+ */
+async function withRegistryLock<T>(operation: () => Promise<T>): Promise<T> {
   await ensureRegistryDir();
+  const lockPath = `${getRegistryPath()}.lock`;
+  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+
+  for (;;) {
+    try {
+      const handle = await open(lockPath, "wx");
+
+      try {
+        await handle.close();
+        return await operation();
+      } finally {
+        await rm(lockPath, { force: true });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+
+      if (Date.now() > deadline && !(await removeStaleLock(lockPath))) {
+        throw new Error(
+          `Timed out waiting for the runit registry lock at ${lockPath}.\n` +
+            "Another runit process may be running. Remove that file if it is stale.",
+        );
+      }
+
+      await delay(LOCK_RETRY_INTERVAL_MS);
+    }
+  }
+}
+
+async function writeFileAtomic(target: string, contents: string): Promise<void> {
+  // Same directory, so the rename cannot cross filesystems.
+  const temporaryPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
 
   try {
-    const raw = await readFile(getRegistryPath(), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Registry file is not a valid object.");
-    }
-
-    return Object.fromEntries(
-      Object.entries(parsed).map(([alias, projectPath]) => {
-        if (typeof projectPath !== "string") {
-          throw new Error(`Registry entry for "${alias}" must be a string path.`);
-        }
-
-        return [alias, projectPath];
-      }),
-    );
+    await writeFile(temporaryPath, contents, "utf8");
+    await rename(temporaryPath, target);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-
+    await rm(temporaryPath, { force: true });
     throw error;
   }
 }
 
-async function writeRegistry(registry: ProjectRegistry): Promise<void> {
+async function readRegistryUnlocked(): Promise<ProjectRegistry> {
   await ensureRegistryDir();
-  await writeFile(getRegistryPath(), `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+
+  let raw: string;
+
+  try {
+    raw = await readFile(getRegistryPath(), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return Object.create(null) as ProjectRegistry;
+    }
+
+    throw error;
+  }
+
+  const parsed = JSON.parse(raw) as unknown;
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Registry file is not a valid object.");
+  }
+
+  // Null-prototype, so a stored alias can never resolve to an inherited member such
+  // as "toString" or "constructor".
+  const registry = Object.create(null) as ProjectRegistry;
+
+  for (const [alias, projectPath] of Object.entries(parsed)) {
+    if (typeof projectPath !== "string") {
+      throw new Error(`Registry entry for "${alias}" must be a string path.`);
+    }
+
+    registry[alias] = projectPath;
+  }
+
+  return registry;
+}
+
+async function writeRegistryUnlocked(registry: ProjectRegistry): Promise<void> {
+  await ensureRegistryDir();
+  await writeFileAtomic(getRegistryPath(), `${JSON.stringify(registry, null, 2)}\n`);
 }
 
 export async function registerProject(alias: string, projectPath: string): Promise<void> {
-  validateAlias(alias);
-  const registry = await readRegistry();
-  registry[alias] = path.resolve(projectPath);
-  await writeRegistry(registry);
+  const normalizedAlias = validateAlias(alias);
+  const resolvedPath = path.resolve(projectPath);
+
+  await withRegistryLock(async () => {
+    const registry = await readRegistryUnlocked();
+    registry[normalizedAlias] = resolvedPath;
+    await writeRegistryUnlocked(registry);
+  });
 }
 
 export async function removeProject(alias: string): Promise<void> {
-  const registry = await readRegistry();
-  delete registry[alias];
-  await writeRegistry(registry);
+  const normalizedAlias = validateAlias(alias);
+
+  await withRegistryLock(async () => {
+    const registry = await readRegistryUnlocked();
+    delete registry[normalizedAlias];
+    await writeRegistryUnlocked(registry);
+  });
 }
 
 export async function getProject(alias: string): Promise<string | undefined> {
-  const registry = await readRegistry();
-  return registry[alias];
+  const normalizedAlias = validateAlias(alias);
+  const registry = await readRegistryUnlocked();
+
+  return Object.hasOwn(registry, normalizedAlias) ? registry[normalizedAlias] : undefined;
 }
 
 export async function listProjects(): Promise<ProjectRegistry> {
-  return readRegistry();
+  return readRegistryUnlocked();
 }
