@@ -11,7 +11,7 @@ import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
 import { runProject } from "./commands/run.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
-import { createShim, isStaleShim, readShim, reclaimLegacyShim } from "./core/shim.ts";
+import { createShim, needsShimRefresh, reclaimLegacyShim } from "./core/shim.ts";
 
 /**
  * Aliases registered before the format was enforced would otherwise report as
@@ -24,9 +24,7 @@ async function refreshStaleShims(): Promise<void> {
       continue;
     }
 
-    const contents = await readShim(alias);
-
-    if (contents !== undefined && isStaleShim(contents)) {
+    if (await needsShimRefresh(alias)) {
       await createShim(alias);
       process.stderr.write(`[migrate] updated the "${alias}" command for the spinup rename\n`);
     }
@@ -49,8 +47,20 @@ async function migrateRegistry(): Promise<void> {
       continue;
     }
 
-    await createShim(migration.to);
-    await reclaimLegacyShim(migration.from);
+    try {
+      await createShim(migration.to);
+    } catch (error) {
+      process.stderr.write(
+        `[migrate] renamed "${migration.from}" to "${migration.to}" in the registry, but could not create its command: ${
+          error instanceof Error ? error.message.split("\n")[0] : String(error)
+        }\n`,
+      );
+      continue;
+    }
+
+    // Pass the new name so a case-insensitive filesystem does not delete the
+    // wrapper that was just written for it.
+    await reclaimLegacyShim(migration.from, migration.to);
     process.stderr.write(`[migrate] renamed alias "${migration.from}" to "${migration.to}"\n`);
   }
 

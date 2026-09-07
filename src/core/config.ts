@@ -1,4 +1,4 @@
-import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, constants, lstat, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -175,17 +175,66 @@ export async function loadConfig(projectRoot: string): Promise<RunitConfig> {
   return parseConfig(raw);
 }
 
-export async function saveConfig(projectRoot: string, config: RunitConfig): Promise<void> {
-  const configPath = getConfigPath(projectRoot);
-  // Serialize before touching disk so a validation failure cannot truncate the
-  // existing file, then swap atomically so an interrupted write leaves either the
-  // old config or the new one, never a partial file.
-  const contents = stringifyConfig(config);
-  const temporaryPath = `${configPath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+function currentUmask(): number {
+  const mask = process.umask();
+  process.umask(mask);
+  return mask;
+}
+
+/** Private by default; the file is chmod'd to its intended mode before publishing. */
+async function writePrivate(target: string, contents: string): Promise<void> {
+  const handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
 
   try {
-    await writeFile(temporaryPath, contents, "utf8");
-    await rename(temporaryPath, configPath);
+    await handle.writeFile(contents, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Replaces the config atomically while keeping its permissions. Writing a new inode
+ * gave it the umask default, so saving an existing 0600 config that carries task
+ * secrets silently republished it as 0644.
+ */
+export async function saveConfig(projectRoot: string, config: RunitConfig): Promise<void> {
+  const configPath = getConfigPath(projectRoot);
+  // Serialize first, so a validation failure cannot touch the existing file.
+  const contents = stringifyConfig(config);
+
+  // A symlinked config is followed deliberately: replace what it points at, rather
+  // than silently turning the user's link into a regular file.
+  let target = configPath;
+
+  try {
+    if ((await lstat(configPath)).isSymbolicLink()) {
+      target = await realpath(configPath);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  let mode: number | undefined;
+
+  try {
+    mode = (await stat(target)).mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const temporaryPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
+
+  try {
+    await writePrivate(temporaryPath, contents);
+    // Restore the original mode, or leave a new file at the default for its dir.
+    // Preserve the original mode; a brand-new file follows the process umask the
+    // way an ordinary create would, rather than inheriting the private temp mode.
+    await chmod(temporaryPath, mode ?? 0o666 & ~currentUmask());
+    await rename(temporaryPath, target);
   } catch (error) {
     await rm(temporaryPath, { force: true });
     throw error;

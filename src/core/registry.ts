@@ -57,12 +57,19 @@ export function isCanonicalAlias(alias: string): boolean {
  * enforced, e.g. "My.App" -> "my-app". Returns undefined when nothing usable
  * survives, so the caller can report it rather than silently dropping the entry.
  */
-export function sanitizeLegacyAlias(alias: string): string | undefined {
+export const MAX_ALIAS_LENGTH = 64;
+
+/**
+ * `reserve` leaves room for a collision suffix. Truncating to the full 64 first and
+ * appending "-2" afterwards produced a 66-character key that could never be used.
+ */
+export function sanitizeLegacyAlias(alias: string, reserve = 0): string | undefined {
   const candidate = normalizeAlias(alias)
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, 64);
+    .slice(0, MAX_ALIAS_LENGTH - reserve)
+    .replace(/[-_]+$/g, "");
 
   return isCanonicalAlias(candidate) ? candidate : undefined;
 }
@@ -268,11 +275,22 @@ export async function migrateLegacyAliases(): Promise<AliasMigration[]> {
 
       let candidate = base;
 
-      for (let suffix = 2; Object.hasOwn(registry, candidate) && suffix < 100; suffix += 1) {
-        candidate = `${base}-${suffix}`;
+      if (Object.hasOwn(registry, candidate)) {
+        // Re-derive with room for the suffix so the result stays within the limit.
+        const stem = sanitizeLegacyAlias(legacyAlias, 4) ?? base;
+        candidate = "";
+
+        for (let suffix = 2; suffix < 100; suffix += 1) {
+          const attempt = `${stem}-${suffix}`;
+
+          if (!Object.hasOwn(registry, attempt) && isCanonicalAlias(attempt)) {
+            candidate = attempt;
+            break;
+          }
+        }
       }
 
-      if (Object.hasOwn(registry, candidate)) {
+      if (!candidate || Object.hasOwn(registry, candidate)) {
         migrations.push({ from: legacyAlias, reason: "every candidate name was taken" });
         continue;
       }

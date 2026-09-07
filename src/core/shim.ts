@@ -1,17 +1,36 @@
-import { access, chmod, constants, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, constants, lstat, mkdir, open, readFile, realpath, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { validateAlias } from "./registry.ts";
 import { getShimDir } from "../utils/paths.ts";
 
-// Identifies a file as ours, so spinup never overwrites or deletes something a user
-// put in their bin directory under the same name. The runit marker is still
-// recognized so shims written before the rename remain ours to manage.
 const SHIM_MARKER = "# spinup-shim v1";
-const LEGACY_SHIM_MARKERS = ["# runit-shim v1"];
 
-function hasShimMarker(contents: string): boolean {
-  return contents.includes(SHIM_MARKER) || LEGACY_SHIM_MARKERS.some((marker) => contents.includes(marker));
+/**
+ * A wrapper is ours only if its entire body matches a format spinup has actually
+ * written, for this exact alias. Searching for a marker substring anywhere in a
+ * file is weak evidence of ownership: any file mentioning the marker would qualify.
+ *
+ * The v0.2.2 wrapper carried no marker at all, which is why an upgrade from that
+ * release could neither refresh nor reclaim it.
+ */
+function knownWrapperBodies(alias: string): string[] {
+  return [
+    // Current.
+    `#!/usr/bin/env bash\n${SHIM_MARKER}\nexec spinup --start "${alias}" "$@"\n`,
+    // v0.3.0, before the rename to spinup.
+    `#!/usr/bin/env bash\n# runit-shim v1\nexec runit --start "${alias}" "$@"\n`,
+    // v0.2.2 and earlier: no marker, no exec.
+    `#!/usr/bin/env bash\nrunit --start "${alias}" "$@"\n`,
+  ];
+}
+
+function buildShimContents(alias: string): string {
+  return knownWrapperBodies(alias)[0]!;
+}
+
+export function isCurrentWrapper(contents: string, alias: string): boolean {
+  return contents === buildShimContents(alias);
 }
 
 export function getShimPath(alias: string): string {
@@ -19,8 +38,6 @@ export function getShimPath(alias: string): string {
   const shimDir = getShimDir();
   const shimPath = path.join(shimDir, normalizedAlias);
 
-  // The alias pattern already excludes separators; this is the backstop that keeps
-  // a future pattern change from reintroducing traversal.
   if (path.dirname(path.resolve(shimPath)) !== path.resolve(shimDir)) {
     throw new Error(`Refusing to derive a shim path outside ${shimDir}.`);
   }
@@ -28,40 +45,50 @@ export function getShimPath(alias: string): string {
   return shimPath;
 }
 
-function buildShimContents(alias: string): string {
-  return `#!/usr/bin/env bash\n${SHIM_MARKER}\nexec spinup --start "${alias}" "$@"\n`;
-}
+type Destination =
+  | { kind: "absent" }
+  | { kind: "symlink" }
+  | { kind: "directory" }
+  | { kind: "other" }
+  | { kind: "file"; contents: string };
 
-/** True when a shim still points at the pre-rename executable. */
-export function isStaleShim(contents: string): boolean {
-  return hasShimMarker(contents) && !contents.includes('exec spinup --start');
-}
+/**
+ * Classifies with lstat so a symlink is never followed. readFile() follows links,
+ * so a dangling one looked like a missing file and writeFile() then created its
+ * target outside the shim directory.
+ */
+async function classify(target: string): Promise<Destination> {
+  let stats;
 
-async function readIfExists(target: string): Promise<string | undefined> {
   try {
-    return await readFile(target, "utf8");
+    stats = await lstat(target);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
+      return { kind: "absent" };
     }
 
     throw error;
   }
+
+  if (stats.isSymbolicLink()) {
+    return { kind: "symlink" };
+  }
+
+  if (stats.isDirectory()) {
+    return { kind: "directory" };
+  }
+
+  if (!stats.isFile()) {
+    return { kind: "other" };
+  }
+
+  return { kind: "file", contents: await readFile(target, "utf8") };
 }
 
-async function isOwnedShim(target: string): Promise<boolean> {
-  const contents = await readIfExists(target);
-  return contents !== undefined && hasShimMarker(contents);
+function describeRefusal(shimPath: string, reason: string): Error {
+  return new Error(`Refusing to write ${shimPath}.\n${reason}\nChoose a different alias.`);
 }
 
-export async function readShim(alias: string): Promise<string | undefined> {
-  return readIfExists(getShimPath(alias));
-}
-
-/**
- * Finds an executable of this name already reachable on PATH. ~/.local/bin usually
- * precedes /usr/bin, so an unchecked alias silently shadows a system command.
- */
 async function findOnPath(name: string): Promise<string | undefined> {
   const shimDir = path.resolve(getShimDir());
 
@@ -73,7 +100,7 @@ async function findOnPath(name: string): Promise<string | undefined> {
     const candidate = path.join(entry, name);
 
     try {
-      await access(candidate, constants.X_OK);
+      await lstat(candidate);
       return candidate;
     } catch {
       // Not here; keep looking.
@@ -83,59 +110,161 @@ async function findOnPath(name: string): Promise<string | undefined> {
   return undefined;
 }
 
+/** Creates the file only if nothing exists at that path, with no check-then-write gap. */
+async function createExclusive(target: string, contents: string): Promise<void> {
+  const handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o755);
+
+  try {
+    await handle.writeFile(contents, "utf8");
+  } finally {
+    await handle.close();
+  }
+
+  await chmod(target, 0o755);
+}
+
+/** Replaces an already-approved wrapper without ever following a final symlink. */
+async function replaceOwned(target: string, contents: string): Promise<void> {
+  const temporaryPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
+
+  try {
+    await createExclusive(temporaryPath, contents);
+    await rename(temporaryPath, target);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
 export async function createShim(alias: string): Promise<void> {
   const normalizedAlias = validateAlias(alias);
   const shimPath = getShimPath(normalizedAlias);
+  await mkdir(getShimDir(), { recursive: true });
 
-  const existing = await readIfExists(shimPath);
+  const destination = await classify(shimPath);
 
-  if (existing !== undefined && !hasShimMarker(existing)) {
-    throw new Error(
-      `Refusing to overwrite ${shimPath}.\n` +
-        "That file already exists and was not created by spinup. Choose a different alias.",
-    );
-  }
+  switch (destination.kind) {
+    case "absent": {
+      const shadowed = await findOnPath(normalizedAlias);
 
-  if (existing === undefined) {
-    const shadowed = await findOnPath(normalizedAlias);
+      if (shadowed) {
+        throw describeRefusal(shimPath, `"${normalizedAlias}" already exists on PATH at ${shadowed}.`);
+      }
 
-    if (shadowed) {
-      throw new Error(
-        `Alias "${normalizedAlias}" would shadow an existing command at ${shadowed}.\n` +
-          "Choose a different alias.",
+      try {
+        await createExclusive(shimPath, buildShimContents(normalizedAlias));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          // Another process won the race; re-evaluate rather than overwrite.
+          throw describeRefusal(shimPath, "Another process created that file first.");
+        }
+
+        throw error;
+      }
+
+      return;
+    }
+
+    case "symlink":
+      throw describeRefusal(
+        shimPath,
+        "That path is a symbolic link. Writing it would modify the file it points at, outside the shim directory.",
       );
+
+    case "directory":
+      throw describeRefusal(shimPath, "That path is a directory.");
+
+    case "other":
+      throw describeRefusal(shimPath, "That path is not a regular file.");
+
+    case "file": {
+      if (!knownWrapperBodies(normalizedAlias).includes(destination.contents)) {
+        throw describeRefusal(shimPath, "That file exists and was not created by spinup.");
+      }
+
+      if (isCurrentWrapper(destination.contents, normalizedAlias)) {
+        return;
+      }
+
+      await replaceOwned(shimPath, buildShimContents(normalizedAlias));
+      return;
     }
   }
+}
 
-  await mkdir(getShimDir(), { recursive: true });
-  await writeFile(shimPath, buildShimContents(normalizedAlias), "utf8");
-  await chmod(shimPath, 0o755);
+/** True when the destination holds a wrapper spinup owns but no longer writes. */
+export async function needsShimRefresh(alias: string): Promise<boolean> {
+  const destination = await classify(getShimPath(alias));
+
+  return (
+    destination.kind === "file" &&
+    knownWrapperBodies(alias).includes(destination.contents) &&
+    !isCurrentWrapper(destination.contents, alias)
+  );
+}
+
+export async function readShim(alias: string): Promise<string | undefined> {
+  const destination = await classify(getShimPath(alias));
+  return destination.kind === "file" ? destination.contents : undefined;
 }
 
 /**
- * Reclaims a shim whose name predates alias validation, so it cannot be routed
- * through getShimPath. basename() plus the containment check neutralizes any
- * separators the stored name may contain.
+ * Removes a wrapper only when it is a regular file whose whole body is one spinup
+ * wrote for this alias. Returns false when there was nothing of ours to remove, so
+ * a caller can report the difference instead of assuming success.
  */
-export async function reclaimLegacyShim(rawName: string): Promise<boolean> {
-  const shimDir = path.resolve(getShimDir());
-  const candidate = path.resolve(path.join(shimDir, path.basename(rawName)));
+export async function removeShim(alias: string): Promise<boolean> {
+  const normalizedAlias = validateAlias(alias);
+  const shimPath = getShimPath(normalizedAlias);
+  const destination = await classify(shimPath);
 
-  if (path.dirname(candidate) !== shimDir || !(await isOwnedShim(candidate))) {
+  if (destination.kind !== "file" || !knownWrapperBodies(normalizedAlias).includes(destination.contents)) {
     return false;
   }
 
-  await rm(candidate, { force: true });
+  await unlink(shimPath);
   return true;
 }
 
-export async function removeShim(alias: string): Promise<void> {
-  const shimPath = getShimPath(alias);
+/**
+ * Reclaims a wrapper stored under a pre-validation alias. The old name cannot go
+ * through getShimPath, so it is reduced to a basename and confined to the shim
+ * directory, and it is removed only when its body is a wrapper written for that
+ * same old alias. Returns false when it resolves to the same file as `keep`, which
+ * happens on a case-insensitive filesystem after a case-only rename.
+ */
+export async function reclaimLegacyShim(rawName: string, keep?: string): Promise<boolean> {
+  const shimDir = path.resolve(getShimDir());
+  const candidate = path.resolve(path.join(shimDir, path.basename(rawName)));
 
-  // Only reclaim files spinup created. A same-named file the user owns stays put.
-  if (!(await isOwnedShim(shimPath))) {
-    return;
+  if (path.dirname(candidate) !== shimDir) {
+    return false;
   }
 
-  await rm(shimPath, { force: true });
+  if (keep) {
+    const keptPath = getShimPath(keep);
+
+    if (candidate === path.resolve(keptPath)) {
+      return false;
+    }
+
+    try {
+      // Case-insensitive filesystems resolve both names to one file; deleting the
+      // old name would delete the wrapper just written for the new one.
+      if ((await realpath(candidate)) === (await realpath(keptPath))) {
+        return false;
+      }
+    } catch {
+      // One of them does not exist; fall through to the ownership check.
+    }
+  }
+
+  const destination = await classify(candidate);
+
+  if (destination.kind !== "file" || !knownWrapperBodies(path.basename(rawName)).includes(destination.contents)) {
+    return false;
+  }
+
+  await unlink(candidate);
+  return true;
 }

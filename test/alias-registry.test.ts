@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -11,7 +11,7 @@ import {
   sanitizeLegacyAlias,
   validateAlias,
 } from "../src/core/registry.ts";
-import { createShim, getShimPath, removeShim } from "../src/core/shim.ts";
+import { createShim, getShimPath, needsShimRefresh, removeShim } from "../src/core/shim.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 const tempDirs: string[] = [];
@@ -92,13 +92,13 @@ describe("shim ownership", () => {
     await writeFile(victim, "#!/bin/sh\necho PRECIOUS\n", "utf8");
     await chmod(victim, 0o755);
 
-    await expect(createShim("precious")).rejects.toThrow(/Refusing to overwrite/);
+    await expect(createShim("precious")).rejects.toThrow(/not created by spinup/);
     expect(await readFile(victim, "utf8")).toContain("PRECIOUS");
   });
 
   test("refuses an alias that would shadow a command already on PATH", async () => {
     await isolate();
-    await expect(createShim("env")).rejects.toThrow(/would shadow an existing command/);
+    await expect(createShim("env")).rejects.toThrow(/already exists on PATH/);
   });
 
   test("leaves a same-named foreign file in place on removal", async () => {
@@ -231,5 +231,88 @@ describe("legacy alias migration", () => {
     expect(sanitizeLegacyAlias("  Weird//Name  ")).toBe("weird-name");
     expect(sanitizeLegacyAlias("---")).toBeUndefined();
     expect(sanitizeLegacyAlias("runit")).toBeUndefined();
+  });
+});
+
+describe("shim safety against non-regular destinations", () => {
+  // readFile() follows symlinks, so a dangling link looked like a missing file and
+  // the wrapper was created at the link's target, outside the shim directory.
+  test("refuses a dangling symlink instead of writing through it", async () => {
+    const { shimDir } = await isolate();
+    const outside = await makeTempDir("runit-outside-");
+    tempDirs.push(outside);
+    const victimPath = path.join(outside, "VICTIM");
+
+    await symlink(victimPath, path.join(shimDir, "danger"));
+
+    await expect(createShim("danger")).rejects.toThrow(/symbolic link/);
+    await expect(readFile(victimPath, "utf8")).rejects.toThrow();
+  });
+
+  test("refuses a symlink that points at a real file", async () => {
+    const { shimDir } = await isolate();
+    const outside = await makeTempDir("runit-outside2-");
+    tempDirs.push(outside);
+    const targetPath = path.join(outside, "real");
+    await writeFile(targetPath, "ORIGINAL", "utf8");
+
+    await symlink(targetPath, path.join(shimDir, "linked"));
+
+    await expect(createShim("linked")).rejects.toThrow(/symbolic link/);
+    expect(await readFile(targetPath, "utf8")).toBe("ORIGINAL");
+  });
+
+  test("refuses a directory in the shim directory", async () => {
+    const { shimDir } = await isolate();
+    await mkdir(path.join(shimDir, "adir"), { recursive: true });
+
+    await expect(createShim("adir")).rejects.toThrow(/directory/);
+  });
+
+  // A marker found anywhere in a file is not proof of ownership.
+  test("does not claim a foreign file that merely mentions the marker", async () => {
+    const { shimDir } = await isolate();
+    const victim = path.join(shimDir, "mentions");
+    await writeFile(victim, "#!/bin/sh\n# spinup-shim v1 is mentioned here\necho MINE\n", "utf8");
+
+    await expect(createShim("mentions")).rejects.toThrow(/not created by spinup/);
+    expect(await removeShim("mentions")).toBe(false);
+    expect(await readFile(victim, "utf8")).toContain("echo MINE");
+  });
+});
+
+describe("historical wrapper formats", () => {
+  const cases: Array<[string, (alias: string) => string]> = [
+    ["v0.2.2 (no marker)", (alias) => `#!/usr/bin/env bash\nrunit --start "${alias}" "$@"\n`],
+    ["v0.3.0 pre-rename", (alias) => `#!/usr/bin/env bash\n# runit-shim v1\nexec runit --start "${alias}" "$@"\n`],
+  ];
+
+  test.each(cases)("adopts and refreshes a %s wrapper", async (_label, build) => {
+    const { shimDir } = await isolate();
+    const wrapperPath = path.join(shimDir, "old");
+    await writeFile(wrapperPath, build("old"), "utf8");
+
+    expect(await needsShimRefresh("old")).toBe(true);
+
+    await createShim("old");
+
+    const refreshed = await readFile(wrapperPath, "utf8");
+    expect(refreshed).toContain('exec spinup --start "old"');
+    expect(await needsShimRefresh("old")).toBe(false);
+  });
+
+  test("a current wrapper needs no refresh and removes cleanly", async () => {
+    await isolate();
+    await createShim("current");
+
+    expect(await needsShimRefresh("current")).toBe(false);
+    expect(await removeShim("current")).toBe(true);
+  });
+
+  test("a wrapper written for a different alias is not ours", async () => {
+    const { shimDir } = await isolate();
+    await writeFile(path.join(shimDir, "mine"), `#!/usr/bin/env bash\nrunit --start "other" "$@"\n`, "utf8");
+
+    await expect(createShim("mine")).rejects.toThrow(/not created by spinup/);
   });
 });
