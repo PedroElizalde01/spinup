@@ -7,7 +7,75 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `spinup` with no arguments and `spinup --help` print the wordmark, version and a
+  one-line tagline before the usage text. Nothing is printed when stdout is not a
+  terminal.
+- Interactive edits patch the existing YAML document node by node, so comments and
+  formatting on everything that did not change survive a save. Saving without
+  changing anything leaves the file's bytes alone and reports "No changes."
+- Regenerating keeps the previous config bytes in a private `.spinup.yml.bak`
+  before replacing the file.
+
+### Changed
+
+- The CLI exits with the failed task's own status, 130 after a handled Ctrl+C and
+  143 after a handled SIGTERM. Every failure used to exit 1.
+- Regeneration describes itself as a replacement, lists changed environment keys
+  without their values, reports reordering and window changes, and refuses to
+  proceed without a terminal to confirm in. An unregistered project with an
+  existing config gets the same preview instead of a silent overwrite.
+- Switching a multi-window tmux action to `simple` asks before dropping the other
+  windows, naming them and their services.
+- `--interactive` fails clearly without a terminal instead of hanging on a prompt.
+- `--remove` reports when no generated command was found for the alias.
+- `--env` reports the action, which files were read, the origin of each key, and
+  which keys the shell is overriding. Values remain masked.
+- The favicon is an S mark; the `RunitConfig` type is `SpinupConfig`.
+
 ### Fixed
+
+- Launching an alias whose tmux session already existed killed that session and
+  rebuilt it, restarting the user's running work or destroying an unrelated
+  session that happened to share the name. Sessions spinup creates now record
+  their project and action; a relaunch attaches to its own session, and any other
+  session with that name is left alone with an error naming its owner.
+- tmux failures echoed the full command line, which for pane creation included
+  every `-e KEY=VALUE`. Failures now report the operation, target and exit status
+  with redacted output.
+- A lone task ran in spinup's own process group, so SIGTERM sent to spinup left
+  its descendants running. Multi-task cleanup skipped any group whose shell had
+  exited even when its child still held a port. Every task now runs in its own
+  group; shutdown sends SIGTERM, waits a bounded grace period, then SIGKILLs
+  survivors, checking group liveness rather than the shell's exit state.
+- Registration wrote the project config before the wrapper, so a rejected alias
+  had already rewritten `.spinup.yml`, and a failed registry write left a runnable
+  wrapper with no entry. The wrapper is created first and removed again if a later
+  step fails.
+- Removal deleted the registry entry before the wrapper, so a failed unlink left a
+  command that launched nothing. The wrapper goes first; a failed removal keeps the
+  registration and reports failure.
+- The registry lock was evicted on age alone, deleting a slow but live holder's
+  lock. The lock now records its holder's pid and is recovered only when that
+  process is gone; otherwise the timeout names the holder.
+- Interactive saves moved the edited tmux window to the front, invented a layout
+  when none was configured, and dropped dependencies on services in other windows.
+  Edits now apply to the original window in place, and only references to services
+  the user removed are dropped, across every window.
+- A real v0.2.2 wrapper carries no marker, so upgrading left it exec'ing the
+  removed `runit` binary while spinup refused to repair it as a foreign file.
+  Ownership is now established by matching the whole body against the formats
+  spinup has written for that alias. Legacy alias collisions no longer produce a
+  66-character key; migration creates the new wrapper before reclaiming the old.
+- A dangling symlink in the shim directory looked like a missing file and the
+  wrapper was created at the link's target. Destinations are classified with
+  `lstat`, symlinks and directories are refused, new wrappers are created
+  exclusively, and approved wrappers are replaced through a rename.
+- Saving an existing `0600` config republished it with the umask default. The
+  original mode is preserved, intermediate files are private, and a symlinked
+  config has its target replaced rather than the link becoming a regular file.
+- `spinup --help | head` no longer prints an EPIPE stack trace.
 
 - Environment precedence is defined and documented. A value set in the invoking
   shell now wins over an environment file, and a task's own `env:` block wins over
@@ -33,11 +101,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The Docker CLI, the Compose plugin, and a reachable daemon are checked separately.
   `docker -v` proved only the first.
 - Tool probes are bounded by a timeout so a diagnostic cannot hang.
-
-### Changed
-
-- `--env` reports the action, which files were read, the origin of each key, and
-  which keys the shell is overriding. Values remain masked.
 
 ## [0.3.0] - 2026-09-06
 

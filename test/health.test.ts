@@ -54,7 +54,7 @@ describe("tool probing", () => {
     const result = await checkTool("python");
 
     expect(result.installed).toBe(true);
-    expect(["python", "python3"]).toContain(result.resolvedCommand);
+    expect(["python", "python3"]).toContain(result.resolvedCommand ?? "");
   });
 
   test("reports a genuinely absent tool as not installed", async () => {

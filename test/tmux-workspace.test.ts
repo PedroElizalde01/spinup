@@ -247,9 +247,12 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
       cwd: projectRoot,
       env: { SPINUP_TEST_SECRET: "top-secret-value" },
       cmd: "sleep 30",
-    }).catch((error: unknown) => error as Error);
+    }).then(
+      () => new Error("respawn-pane unexpectedly succeeded"),
+      (error: unknown) => error as Error,
+    );
 
-    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).not.toContain("unexpectedly");
     const serialized = `${failure.message}\n${failure.stack ?? ""}\n${JSON.stringify(failure)}`;
     expect(serialized).not.toContain("top-secret-value");
     expect(serialized).not.toContain("SPINUP_TEST_SECRET");

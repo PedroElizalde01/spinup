@@ -114,6 +114,11 @@ my-app
 
 If the alias already exists, running `spinup my-app` will only tell you that it is already registered.
 
+Running the alias again while its tmux session is still up attaches to that session
+instead of rebuilding it. A session with the same name that spinup did not create,
+or that belongs to another project or action, is never touched: the launch fails and
+tells you how to attach to or end it.
+
 Inspect and manage a registered project:
 
 ```bash
@@ -142,7 +147,7 @@ spinup --list
 ## Commands
 
 - `spinup <alias>`: register if needed, otherwise report that the alias already exists
-- `spinup <alias> --regenerate`: rescan the repo and refresh `.spinup.yml`
+- `spinup <alias> --regenerate`: rescan the repo and replace `.spinup.yml` after a preview and confirmation; the previous file is kept as `.spinup.yml.bak`
 - `spinup <alias> --doctor`: inspect config, stack detection, and tool availability
 - `spinup <alias> --check`: validate required tools and config paths
 - `spinup <alias> --plan`: print the execution plan
@@ -153,6 +158,20 @@ spinup --list
 - `spinup <alias> --remove`: remove the registered project and generated shim
 - `spinup --list`: list registered projects
 - `spinup --version`: print the installed version
+
+## Exit status
+
+| Status | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Usage, configuration or registration error |
+| _n_ | A task in a `simple` action exited with status _n_; spinup returns it unchanged |
+| 130 | Stopped by Ctrl+C after the tasks were shut down |
+| 143 | Stopped by SIGTERM after the tasks were shut down |
+
+In `simple` mode every task runs in its own process group. On failure or on a
+signal, spinup sends SIGTERM to each group, waits three seconds, and kills whatever
+is still running, so a shell's children do not outlive the run.
 
 ## Terminal Examples
 

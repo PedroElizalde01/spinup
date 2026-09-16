@@ -83,6 +83,15 @@ type CliOptions = {
   start?: boolean;
 };
 
+// `spinup | head` closes the pipe early; that is not an error worth a stack trace.
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") {
+    process.exit(0);
+  }
+
+  throw error;
+});
+
 const program = new Command();
 
 program

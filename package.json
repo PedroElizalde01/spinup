@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "bun test",
     "build": "bash scripts/build-release.sh --output dist/spinup",
     "build:release": "bash scripts/build-release.sh"
@@ -22,6 +22,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.2",
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2"
   },
