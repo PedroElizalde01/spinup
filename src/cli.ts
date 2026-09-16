@@ -10,6 +10,7 @@ import { editProject } from "./commands/edit.ts";
 import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
 import { runProject } from "./commands/run.ts";
+import { exitCodeFor, Interrupted } from "./core/executor.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
 import { createShim, needsShimRefresh, reclaimLegacyShim } from "./core/shim.ts";
 import { banner } from "./ui/brand.ts";
@@ -188,6 +189,7 @@ try {
   await program.parseAsync(process.argv);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
+  process.stderr.write(error instanceof Interrupted ? `[run] ${message}\n` : `${message}\n`);
+  // A task's own status, 130/143 for a handled signal, 1 for everything else.
+  process.exitCode = exitCodeFor(error);
 }

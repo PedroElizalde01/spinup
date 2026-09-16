@@ -119,3 +119,116 @@ describe("simple-mode execution", () => {
     expect(output).toContain("STREAM_COMPLETE");
   }, 240_000);
 });
+
+// Signals are delivered to a child process running the executor, so a test
+// cannot take the runner down with it. Every task lives in its own process
+// group, and each check proves the group's descendants are gone afterwards.
+const FIXTURE = new URL("./fixtures/run-tasks.ts", import.meta.url).pathname;
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForDeath(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) {
+      return true;
+    }
+
+    await Bun.sleep(50);
+  }
+
+  return !pidAlive(pid);
+}
+
+async function spawnFixture(tasks: Task[], signal?: NodeJS.Signals) {
+  const { execa } = await import("execa");
+  const projectRoot = await makeTempDir("spinup-signal-");
+  tempDirs.push(projectRoot);
+
+  const child = execa("bun", ["run", FIXTURE, JSON.stringify(tasks)], {
+    cwd: projectRoot,
+    reject: false,
+    stdin: "ignore",
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+
+  // Tasks announce a descendant pid as PID:<n>; the signal goes out once it exists.
+  const descendantPid = new Promise<number>((resolve, reject) => {
+    let seen = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      seen += chunk.toString();
+      const match = /PID:(\d+)/.exec(seen);
+      if (match) {
+        resolve(Number(match[1]));
+      }
+    });
+    child.stdout?.on("end", () => reject(new Error(`no PID line in output:\n${seen}`)));
+  });
+  // Only awaited when a signal is requested; keep the other case from rejecting unhandled.
+  descendantPid.catch(() => undefined);
+
+  const started = Date.now();
+  let pid: number | undefined;
+
+  if (signal) {
+    pid = await descendantPid;
+    // Let the shell settle so the case "shell exited before descendant" is real.
+    await Bun.sleep(300);
+    child.kill(signal);
+  }
+
+  const result = await child;
+  return { result, pid, elapsed: Date.now() - started };
+}
+
+describe("simple-mode lifecycle", () => {
+  test("SIGTERM to spinup stops a single task's descendants and exits 143", async () => {
+    const { result, pid } = await spawnFixture(
+      [{ name: "svc", cwd: ".", cmd: "sh -c 'sleep 60 & echo PID:$!; wait'" }],
+      "SIGTERM",
+    );
+
+    expect(result.exitCode).toBe(143);
+    expect(await waitForDeath(pid!, 2000)).toBe(true);
+  }, 20_000);
+
+  test("SIGINT stops a descendant whose shell already exited and exits 130", async () => {
+    const { result, pid } = await spawnFixture(
+      [
+        // The shell prints the pid and exits; only the group still refers to sleep.
+        { name: "orphaner", cwd: ".", cmd: "sh -c '(sleep 60 & echo PID:$!)'" },
+        { name: "keeper", cwd: ".", cmd: "sleep 60" },
+      ],
+      "SIGINT",
+    );
+
+    expect(result.exitCode).toBe(130);
+    expect(await waitForDeath(pid!, 2000)).toBe(true);
+  }, 20_000);
+
+  test("kills a descendant that ignores SIGTERM once the grace period ends", async () => {
+    const { result, pid, elapsed } = await spawnFixture(
+      [{ name: "stubborn", cwd: ".", cmd: "sh -c 'trap \"\" TERM; echo PID:$$; sleep 60'" }],
+      "SIGTERM",
+    );
+
+    expect(result.exitCode).toBe(143);
+    expect(await waitForDeath(pid!, 2000)).toBe(true);
+    // 3s grace plus a small allowance, not the 60s the task wanted.
+    expect(elapsed).toBeLessThan(8000);
+  }, 20_000);
+
+  test("a task's exit status is the process exit status", async () => {
+    const { result } = await spawnFixture([{ name: "code", cwd: ".", cmd: "exit 42" }]);
+
+    expect(result.exitCode).toBe(42);
+  }, 20_000);
+});

@@ -2,7 +2,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Readable, Writable } from "node:stream";
 
-import { execa, type ResultPromise } from "execa";
+import { execa } from "execa";
 
 import { buildDependencyGraph } from "./dependencies.ts";
 import { launchTmuxWorkspace } from "../tmux/runner.ts";
@@ -20,6 +20,9 @@ const MAX_PENDING_LINE_LENGTH = 64 * 1024;
 
 // How long a process group gets to exit after SIGTERM before it is killed outright.
 const TERMINATION_GRACE_MS = 3000;
+// How long to wait for SIGKILL to take effect before giving up on a group.
+const KILL_SETTLE_MS = 1000;
+const LIVENESS_POLL_MS = 50;
 
 class TaskFailure extends Error {
   readonly exitCode: number;
@@ -29,6 +32,29 @@ class TaskFailure extends Error {
     this.name = "TaskFailure";
     this.exitCode = exitCode;
   }
+}
+
+/** The run was stopped by a signal to spinup itself, after its tasks were shut down. */
+class Interrupted extends Error {
+  readonly exitCode: number;
+  readonly signal: ExitSignal;
+
+  constructor(signal: ExitSignal) {
+    super(`stopped by ${signal}`);
+    this.name = "Interrupted";
+    this.signal = signal;
+    // Conventional status for a handled signal: 128 + signal number.
+    this.exitCode = signal === "SIGINT" ? 130 : 143;
+  }
+}
+
+/** The status the CLI should exit with for an error raised by a run. */
+function exitCodeFor(error: unknown): number {
+  if (error instanceof TaskFailure || error instanceof Interrupted) {
+    return error.exitCode;
+  }
+
+  return 1;
 }
 
 /**
@@ -94,14 +120,14 @@ function getExitCode(error: unknown): number {
 
 function createTerminationController(): {
   abortController: AbortController;
-  signalReceived: () => boolean;
+  signalReceived: () => ExitSignal | undefined;
   cleanup: () => void;
 } {
   const abortController = new AbortController();
-  let received = false;
+  let received: ExitSignal | undefined;
 
   const abortOnSignal = (signal: ExitSignal) => {
-    received = true;
+    received ??= signal;
 
     if (!abortController.signal.aborted) {
       abortController.abort(new Error(`Received ${signal}`));
@@ -125,61 +151,68 @@ function createTerminationController(): {
 }
 
 /**
- * Signals a detached child's entire process group. Killing only the immediate
- * child leaves the shell's descendants holding ports and file handles.
+ * Every task is started detached, so its pid is also a process group id that
+ * covers the shell and everything the shell spawned. The group outlives the
+ * shell: "npm run dev" style wrappers can exit while their child keeps a port.
  */
-function signalProcessGroup(subprocess: ResultPromise, signal: NodeJS.Signals): void {
-  const { pid } = subprocess;
+type OwnedGroup = {
+  name: string;
+  pgid: number;
+};
 
-  if (pid === undefined) {
-    return;
-  }
-
+/** Signal 0 probes without delivering: true while any member of the group exists. */
+function groupAlive(pgid: number): boolean {
   try {
-    process.kill(-pid, signal);
+    process.kill(-pgid, 0);
+    return true;
   } catch {
-    // Group is already gone, or we never owned one; fall back to the child itself.
-    try {
-      subprocess.kill(signal);
-    } catch {
-      // Nothing left to signal.
-    }
+    return false;
   }
 }
 
-async function terminateAll(running: ResultPromise[], detached: boolean): Promise<void> {
-  const alive = running.filter((subprocess) => subprocess.exitCode === null && !subprocess.killed);
+function signalGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    // Already gone.
+  }
+}
+
+async function waitForGroups(groups: OwnedGroup[], timeoutMs: number): Promise<OwnedGroup[]> {
+  const deadline = Date.now() + timeoutMs;
+  let survivors = groups.filter((group) => groupAlive(group.pgid));
+
+  while (survivors.length > 0 && Date.now() < deadline) {
+    await delay(LIVENESS_POLL_MS);
+    survivors = survivors.filter((group) => groupAlive(group.pgid));
+  }
+
+  return survivors;
+}
+
+/**
+ * Terminates only the groups this run created: SIGTERM, a bounded grace period,
+ * then SIGKILL for whatever ignored it. Never signals spinup's own group.
+ */
+async function terminateGroups(groups: OwnedGroup[]): Promise<void> {
+  const alive = groups.filter((group) => groupAlive(group.pgid));
 
   if (alive.length === 0) {
     return;
   }
 
-  for (const subprocess of alive) {
-    if (detached) {
-      signalProcessGroup(subprocess, "SIGTERM");
-      continue;
-    }
-
-    subprocess.kill("SIGTERM");
+  for (const group of alive) {
+    signalGroup(group.pgid, "SIGTERM");
   }
 
-  await Promise.race([
-    Promise.allSettled(alive.map((subprocess) => subprocess.catch(() => undefined))),
-    delay(TERMINATION_GRACE_MS),
-  ]);
+  const stubborn = await waitForGroups(alive, TERMINATION_GRACE_MS);
 
-  for (const subprocess of alive) {
-    if (subprocess.exitCode !== null) {
-      continue;
-    }
-
-    if (detached) {
-      signalProcessGroup(subprocess, "SIGKILL");
-      continue;
-    }
-
-    subprocess.kill("SIGKILL");
+  for (const group of stubborn) {
+    console.error(`[${group.name}] did not stop after ${TERMINATION_GRACE_MS}ms, killing`);
+    signalGroup(group.pgid, "SIGKILL");
   }
+
+  await waitForGroups(stubborn, KILL_SETTLE_MS);
 }
 
 async function runSimpleAction(
@@ -191,13 +224,16 @@ async function runSimpleAction(
   const tasks = buildDependencyGraph(action.tasks ?? []);
   const { abortController, signalReceived, cleanup } = createTerminationController();
 
-  // A lone task stays in this process group so the terminal drives it directly:
-  // Ctrl+C reaches its descendants, and it can read stdin. With several tasks
-  // there is no single foreground process, so each gets its own group that we
-  // terminate explicitly, and none of them may steal the terminal's input.
+  // A lone task may read the terminal; with several there is no single
+  // foreground process, so none of them gets stdin.
   const single = tasks.length === 1;
-  const running: ResultPromise[] = [];
+  const groups: OwnedGroup[] = [];
+  const waits: Promise<unknown>[] = [];
   let firstFailure: TaskFailure | undefined;
+
+  // One owner for shutdown: whoever asks first starts it, everyone awaits the same run.
+  let shutdown: Promise<void> | undefined;
+  const stopEverything = (): Promise<void> => (shutdown ??= terminateGroups(groups));
 
   const failFast = (failure: TaskFailure) => {
     firstFailure ??= failure;
@@ -209,13 +245,7 @@ async function runSimpleAction(
 
   // Aborting only stops *new* tasks. Without this, waiting on the already-running
   // ones would still block on the survivors of a failed startup.
-  abortController.signal.addEventListener(
-    "abort",
-    () => {
-      void terminateAll(running, !single);
-    },
-    { once: true },
-  );
+  abortController.signal.addEventListener("abort", () => void stopEverything(), { once: true });
 
   console.log("[deps] resolving dependencies");
 
@@ -240,25 +270,37 @@ async function runSimpleAction(
         },
         shell: true,
         buffer: false,
-        detached: !single,
-        stdin: single ? "inherit" : "ignore",
+        // Own process group, so shutdown reaches the shell's descendants too.
+        detached: true,
+        stdin: single ? "pipe" : "ignore",
         stdout: "pipe",
         stderr: "pipe",
         cleanup: true,
         forceKillAfterDelay: TERMINATION_GRACE_MS,
       });
 
-      running.push(subprocess);
+      if (subprocess.pid !== undefined) {
+        groups.push({ name: task.name, pgid: subprocess.pid });
+      }
+
+      if (single && subprocess.stdin) {
+        // pipe() applies backpressure; a detached child cannot inherit the terminal.
+        process.stdin.pipe(subprocess.stdin);
+        waits.push(subprocess.finally(() => process.stdin.unpipe(subprocess.stdin!)).catch(() => undefined));
+      }
+
       pipePrefixedOutput(subprocess.stdout, prefix, process.stdout);
       pipePrefixedOutput(subprocess.stderr, prefix, process.stderr);
 
-      void subprocess.catch((error: unknown) => {
-        if (isCanceledError(error) || abortController.signal.aborted) {
-          return;
-        }
+      waits.push(
+        subprocess.catch((error: unknown) => {
+          if (isCanceledError(error) || abortController.signal.aborted) {
+            return;
+          }
 
-        failFast(new TaskFailure(task.name, task.cmd, getExitCode(error), error));
-      });
+          failFast(new TaskFailure(task.name, task.cmd, getExitCode(error), error));
+        }),
+      );
 
       if (task.delay) {
         try {
@@ -269,20 +311,28 @@ async function runSimpleAction(
       }
     }
 
-    await Promise.allSettled(running.map((subprocess) => subprocess.catch(() => undefined)));
+    await Promise.allSettled(waits);
+
+    // The shells have exited; anything still alive in their groups is ours to stop.
+    await stopEverything();
 
     if (firstFailure) {
-      await terminateAll(running, !single);
       throw firstFailure;
     }
 
-    if (signalReceived()) {
-      await terminateAll(running, !single);
-      process.exitCode = 130;
+    const signal = signalReceived();
+
+    if (signal) {
+      throw new Interrupted(signal);
     }
   } finally {
-    await terminateAll(running, !single);
+    await stopEverything();
     cleanup();
+
+    if (single) {
+      // Let the process exit: a piped stdin keeps reading otherwise.
+      process.stdin.pause();
+    }
   }
 }
 
@@ -307,4 +357,4 @@ export async function executeAction(
   await runSimpleAction(projectRoot, config, action, options.environment ?? process.env);
 }
 
-export { TaskFailure };
+export { exitCodeFor, Interrupted, TaskFailure };
