@@ -9,7 +9,7 @@ import { checkTools, inferRequiredTools, validateConfigPaths } from "../core/hea
 import { scanProject } from "../core/scanner.ts";
 import type { Action, SpinupConfig } from "../types/config.ts";
 import { emit, EXIT } from "../ui/output.ts";
-import { actionEntries, loadRegisteredProject, resolveActionRoot, selectAction } from "./shared.ts";
+import { actionEntries, loadProject, resolveActionRoot, selectAction } from "./shared.ts";
 
 type InspectOptions = {
   action?: string;
@@ -108,8 +108,8 @@ export function renderExecutionPlan(plan: ExecutionPlan): void {
   }
 }
 
-export async function previewProjectPlan(alias: string, options: InspectOptions = {}): Promise<void> {
-  const { projectRoot, config } = await loadRegisteredProject(alias);
+export async function previewProjectPlan(alias: string | undefined, options: InspectOptions = {}): Promise<void> {
+  const { projectRoot, config } = await loadProject(alias);
   const { actionName } = selectAction(config, options.action);
   const plan = buildExecutionPlan(projectRoot, config, actionName);
 
@@ -119,8 +119,8 @@ export async function previewProjectPlan(alias: string, options: InspectOptions 
   });
 }
 
-export async function previewProjectGraph(alias: string, options: InspectOptions = {}): Promise<void> {
-  const { config } = await loadRegisteredProject(alias);
+export async function previewProjectGraph(alias: string | undefined, options: InspectOptions = {}): Promise<void> {
+  const { config } = await loadProject(alias);
   const { actionName, action } = selectAction(config, options.action);
   const entries = actionEntries(action);
   const report = {
@@ -139,8 +139,8 @@ export async function previewProjectGraph(alias: string, options: InspectOptions
   });
 }
 
-export async function previewProjectEnv(alias: string, options: InspectOptions = {}): Promise<void> {
-  const { projectRoot, config } = await loadRegisteredProject(alias);
+export async function previewProjectEnv(alias: string | undefined, options: InspectOptions = {}): Promise<void> {
+  const { projectRoot, config } = await loadProject(alias);
   const { actionName } = selectAction(config, options.action);
   const env = await loadEnv(resolveActionRoot(projectRoot, config), actionName);
   const keys = Object.keys(env.values)
@@ -176,8 +176,9 @@ export async function previewProjectEnv(alias: string, options: InspectOptions =
   });
 }
 
-export async function doctorProject(alias: string, options: InspectOptions = {}): Promise<void> {
-  const { projectRoot, config } = await loadRegisteredProject(alias);
+export async function doctorProject(alias: string | undefined, options: InspectOptions = {}): Promise<void> {
+  const project = await loadProject(alias);
+  const { projectRoot, config } = project;
   const { actionName, action } = selectAction(config, options.action);
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
@@ -192,7 +193,8 @@ export async function doctorProject(alias: string, options: InspectOptions = {})
   const services = actionEntries(action).map((item) => item.name);
 
   const report = {
-    alias,
+    alias: project.alias,
+    registered: project.registered,
     path: projectRoot,
     configPath: getConfigPath(projectRoot),
     version: config.version ?? 1,
@@ -229,7 +231,7 @@ export async function doctorProject(alias: string, options: InspectOptions = {})
 
   emit(report, () => {
     printBanner("Project Doctor");
-    console.log(`Project: ${alias}`);
+    console.log(`Project: ${project.alias}${project.registered ? "" : " (not registered; from the current directory)"}`);
     console.log(`Path: ${projectRoot}\n`);
 
     console.log("Config file:");

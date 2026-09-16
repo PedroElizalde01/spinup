@@ -1,13 +1,13 @@
 import { checkDocker, checkTools, collectToolWarnings, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
 import { emit, EXIT } from "../ui/output.ts";
-import { loadRegisteredProject, selectAction } from "./shared.ts";
+import { loadProject, selectAction } from "./shared.ts";
 
 type CheckOptions = {
   action?: string;
 };
 
-export async function checkProject(alias: string, options: CheckOptions = {}): Promise<void> {
-  const { projectRoot, config } = await loadRegisteredProject(alias);
+export async function checkProject(alias: string | undefined, options: CheckOptions = {}): Promise<void> {
+  const { projectRoot, config } = await loadProject(alias);
   const { actionName } = selectAction(config, options.action);
   // Requirements come from the selected commands alone; no scan is needed.
   const tools = await checkTools(inferRequiredTools(config, actionName));

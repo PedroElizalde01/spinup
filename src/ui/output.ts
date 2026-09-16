@@ -31,4 +31,6 @@ export const EXIT = {
   ok: 0,
   usage: 1,
   notReady: 2,
+  /** --status: the session is not running. */
+  notRunning: 3,
 } as const;

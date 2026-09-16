@@ -14,7 +14,6 @@ import {
 } from "../core/config.ts";
 import { buildDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
-import { loadEnv } from "../core/env.ts";
 import { executeAction } from "../core/executor.ts";
 import type { ProjectDetection } from "../core/detectors/types.ts";
 import { generateConfig, generatedComments } from "../core/generator.ts";
@@ -24,7 +23,7 @@ import { scanProject } from "../core/scanner.ts";
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
 import { colorEnabled } from "../ui/output.ts";
 import { buildExecutionPlan, renderExecutionPlan } from "./doctor.ts";
-import { selectAction, sessionNameFor } from "./shared.ts";
+import { resolveLaunchEnvironment, selectAction, sessionNameFor } from "./shared.ts";
 import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
 import { GLYPH } from "../ui/brand.ts";
 
@@ -579,12 +578,11 @@ function printSetupCard(
   }
 }
 
-async function startConfiguredProject(alias: string, projectRoot: string, options: RunProjectOptions): Promise<void> {
+/** Launches a project's selected action. Used by the alias command, local runs and --restart. */
+export async function launchProject(alias: string, projectRoot: string, options: RunProjectOptions): Promise<void> {
   const config = await loadConfig(projectRoot);
   const { actionName, action } = selectAction(config, options.action);
-  // Environment files live next to the action's root, not necessarily the
-  // directory the project was registered from.
-  const env = await loadEnv(path.resolve(projectRoot, config.root), actionName);
+  const { environment, loaded: env } = await resolveLaunchEnvironment(projectRoot, config, actionName);
 
   if (options.dryRun) {
     // Everything a launch resolves, nothing a launch starts.
@@ -629,11 +627,8 @@ async function startConfiguredProject(alias: string, projectRoot: string, option
     console.log("[run] starting dev environment...");
   }
 
-  // The whole application environment, decided once: the invoking shell, then the
-  // selected files where the shell did not already set a key. Both backends get
-  // exactly this; a task's own env: block is layered on top by the backend.
   await executeAction(projectRoot, config, actionName, {
-    environment: { ...process.env, ...env.applied },
+    environment,
     sessionName: sessionNameFor(alias, config, actionName),
   });
 }
@@ -642,7 +637,7 @@ export async function runProject(alias: string, options: RunProjectOptions = {})
   const { projectRoot, bootstrapped } = await ensureProjectReady(alias, options);
 
   if (options.start) {
-    await startConfiguredProject(alias, projectRoot, options);
+    await launchProject(alias, projectRoot, options);
     return;
   }
 

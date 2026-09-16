@@ -1,3 +1,6 @@
+import { realpath } from "node:fs/promises";
+import path from "node:path";
+
 import { execa } from "execa";
 
 const TMUX_NOT_INSTALLED_MESSAGE = 'tmux is not installed.\n\nPlease install tmux or change action mode to "simple".';
@@ -273,6 +276,51 @@ export async function isolateSessionEnvironment(sessionId: string, wanted: Set<s
       await runTmux(["set-environment", "-t", sessionId, "-r", key]);
     }
   }
+}
+
+/**
+ * Symlinked checkouts must not make one project look like two, or a relaunch
+ * would refuse its own session.
+ */
+export async function canonicalProject(projectRoot: string): Promise<string> {
+  try {
+    return await realpath(projectRoot);
+  } catch {
+    return path.resolve(projectRoot);
+  }
+}
+
+/** Records which configured service a pane runs. The option survives respawn-pane. */
+export async function markPaneService(paneId: string, service: string): Promise<void> {
+  await runTmux(["set-option", "-p", "-t", paneId, "@spinup_service", service]);
+}
+
+export type ServicePane = {
+  paneId: string;
+  service: string;
+  window: string;
+  pid: number;
+  /** Undefined while running. */
+  exitStatus?: number;
+};
+
+export async function listServicePanes(sessionId: string): Promise<ServicePane[]> {
+  const format = ["#{pane_id}", "#{@spinup_service}", "#{window_name}", "#{pane_pid}", "#{pane_dead}", "#{pane_dead_status}"].join("\t");
+  const listed = await runTmux(["list-panes", "-s", "-t", sessionId, "-F", format]);
+
+  return listed
+    .split("\n")
+    .filter(Boolean)
+    .map((row) => {
+      const [paneId, service, window, pid, dead, status] = row.split("\t");
+      return {
+        paneId: paneId!,
+        service: service ?? "",
+        window: window ?? "",
+        pid: Number(pid),
+        exitStatus: dead === "1" ? Number(status || -1) : undefined,
+      };
+    });
 }
 
 /** Set by tmux itself for each pane; passing the caller's would be wrong. */

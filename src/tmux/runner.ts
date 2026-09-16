@@ -1,4 +1,3 @@
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { buildDependencyGraph } from "../core/dependencies.ts";
@@ -8,10 +7,12 @@ import {
   attachSession,
   createSession,
   createWindow,
+  canonicalProject,
   ensureTmuxInstalled,
   findSessionId,
   isolateSessionEnvironment,
   killSessionQuietly,
+  markPaneService,
   markSessionOwner,
   readSessionOwner,
   TMUX_OWNED_KEYS,
@@ -23,7 +24,7 @@ type PlacedPane = {
   paneId: string;
 };
 
-function resolvePaneCwd(projectRoot: string, config: SpinupConfig, cwd: string): string {
+export function resolvePaneCwd(projectRoot: string, config: SpinupConfig, cwd: string): string {
   const actionRoot = path.resolve(projectRoot, config.root);
   return path.resolve(actionRoot, cwd);
 }
@@ -66,6 +67,10 @@ async function buildWorkspace(
       placed.push({ pane, paneId: await addPane(windowId, window.layout) });
     }
 
+    for (const { pane, paneId } of placed.slice(-window.panes.length)) {
+      await markPaneService(paneId, pane.name);
+    }
+
     await applyWindowLayout(windowId, window.layout);
   }
 
@@ -105,18 +110,6 @@ async function startPanes(
     },
     new AbortController(),
   );
-}
-
-/**
- * Symlinked checkouts and case differences must not make one project look like two,
- * or a relaunch would refuse its own session.
- */
-async function canonicalProject(projectRoot: string): Promise<string> {
-  try {
-    return await realpath(projectRoot);
-  } catch {
-    return path.resolve(projectRoot);
-  }
 }
 
 export async function launchTmuxWorkspace(

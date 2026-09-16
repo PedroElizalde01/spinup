@@ -9,7 +9,9 @@ import { doctorProject, previewProjectEnv, previewProjectGraph, previewProjectPl
 import { editProject } from "./commands/edit.ts";
 import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
-import { runProject } from "./commands/run.ts";
+import { launchProject, runProject } from "./commands/run.ts";
+import { attachProject, restartProject, statusProject, stopProject } from "./commands/session.ts";
+import { loadProject } from "./commands/shared.ts";
 import { exitCodeFor, Interrupted } from "./core/executor.ts";
 import { EXIT, setJsonMode } from "./ui/output.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
@@ -85,7 +87,11 @@ type CliOptions = {
   plan?: boolean;
   regenerate?: boolean;
   remove?: boolean;
+  restart?: boolean | string;
   start?: boolean;
+  status?: boolean;
+  stop?: boolean;
+  attach?: boolean;
 };
 
 // `spinup | head` closes the pipe early; that is not an error worth a stack trace.
@@ -112,7 +118,7 @@ program
   // like they worked. Fail loudly until a passthrough contract exists.
   .allowExcessArguments(false)
   .addHelpText("beforeAll", banner)
-  .argument("[alias]", "registered project alias")
+  .argument("[alias]", "registered project alias; without one, the project in the current directory")
   // The generated command passes --start. It means "launch unless a management
   // flag was given", so `my-app --doctor` inspects instead of launching.
   .addOption(new Option("--start", "start the registered project").hideHelp())
@@ -130,6 +136,10 @@ program
   .option("-r, --regenerate", "re-scan the project and overwrite the project config")
   .option("--remove", "remove a registered project and its shim")
   .option("--list", "list registered projects")
+  .option("--status", "show whether the tmux session is running and each service's state")
+  .option("--attach", "attach to the running tmux session")
+  .option("--stop", "end the tmux session")
+  .option("--restart [service]", "restart one service in the tmux session, or the whole session")
   .action(async (alias: string | undefined, options: CliOptions) => {
     await migrateRegistry();
     setJsonMode(Boolean(options.json));
@@ -143,6 +153,10 @@ program
       list: options.list,
       plan: options.plan,
       remove: options.remove,
+      status: options.status,
+      attach: options.attach,
+      stop: options.stop,
+      restart: options.restart,
     };
     const active = Object.entries(management)
       .filter(([, enabled]) => enabled)
@@ -153,14 +167,16 @@ program
     }
 
     const primary = active[0] ?? (options.start ? "start" : alias ? "register" : "help");
-    const inspecting = ["check", "doctor", "env", "graph", "plan", "list"].includes(primary);
+    const inspecting = ["check", "doctor", "env", "graph", "plan", "list", "status"].includes(primary);
 
     if (options.json && !inspecting) {
-      throw new Error("--json applies to --list, --plan, --graph, --env, --check and --doctor.");
+      throw new Error("--json applies to --list, --plan, --graph, --env, --check, --doctor and --status.");
     }
 
-    if (options.action && !["start", "check", "doctor", "env", "graph", "plan"].includes(primary)) {
-      throw new Error("--action applies to launching, --plan, --graph, --env, --check and --doctor.");
+    const actionAware = ["start", "check", "doctor", "env", "graph", "plan", "status", "attach", "stop", "restart"];
+
+    if (options.action && !actionAware.includes(primary)) {
+      throw new Error("--action applies to launching, --plan, --graph, --env, --check, --doctor, --status, --attach, --stop and --restart.");
     }
 
     if (options.dryRun && primary !== "start") {
@@ -186,12 +202,9 @@ program
       return;
     }
 
-    if (!alias) {
-      throw new Error("An alias is required unless --list is used.");
-    }
-
     const selected = { action: options.action };
 
+    // These act on a project; without an alias it is the one in the current directory.
     switch (primary) {
       case "check":
         return checkProject(alias, selected);
@@ -203,6 +216,31 @@ program
         return previewProjectGraph(alias, selected);
       case "plan":
         return previewProjectPlan(alias, selected);
+      case "status":
+        return statusProject(alias, selected);
+      case "attach":
+        return attachProject(alias, selected);
+      case "stop":
+        return stopProject(alias, selected);
+      case "restart":
+        return restartProject(alias, typeof options.restart === "string" ? options.restart : undefined, selected);
+    }
+
+    if (!alias && primary === "start") {
+      if (options.regenerate) {
+        throw new Error("--regenerate needs a registered alias.");
+      }
+
+      // Runs the config in this directory as-is: no registration, no command installed, nothing generated.
+      const project = await loadProject(undefined);
+      return launchProject(project.alias, project.projectRoot, { start: true, action: options.action, dryRun: options.dryRun });
+    }
+
+    if (!alias) {
+      throw new Error("An alias is required to register, edit or remove a project.");
+    }
+
+    switch (primary) {
       case "edit":
         return editProject(alias, { interactive: options.interactive });
       case "remove":
