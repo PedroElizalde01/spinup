@@ -3,7 +3,7 @@
 set -euo pipefail
 
 OWNER="PedroElizalde01"
-REPO="runit"   # GitHub repository name; the installed binary is "spinup"
+REPO="spinup"
 INSTALL_DIR="${HOME}/.local/bin"
 VERSION=""
 
@@ -82,6 +82,13 @@ fi
 
 if [[ -z "${VERSION}" ]]; then
   echo "Unable to resolve the latest spinup release." >&2
+  exit 1
+fi
+
+# Releases before v0.3.0 shipped a binary named runit, under asset names this
+# script does not build. Refuse them instead of requesting a URL that 404s.
+if [[ "$(printf '%s\n%s\n' "v0.3.0" "${VERSION}" | sort -V | head -n 1)" != "v0.3.0" ]]; then
+  echo "${VERSION} predates the rename to spinup and cannot be installed with this script. Install v0.3.0 or newer." >&2
   exit 1
 fi
 

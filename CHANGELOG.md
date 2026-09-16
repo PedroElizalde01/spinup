@@ -7,6 +7,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-16
+
+### Upgrading
+
+This release changes behavior that existing configs and scripts can depend on:
+
+- Configs are validated strictly. A misspelled or unsupported key, a blank command,
+  an invalid environment variable name, a dependency cycle or an empty `simple`
+  action is now an error. `spinup <alias> --doctor` shows the offending field.
+- The exit status is the failed task's own, 130 or 143 after a signal, 2 when
+  `--check` or `--doctor` finds the action cannot run, and 3 from `--status` when
+  nothing is running. Every failure used to exit 1.
+- A `delay` holds back only that service's dependents.
+- Relaunching an alias whose tmux session is running attaches to it instead of
+  restarting it. Use `--restart` for that.
+- Newly generated configs run Compose as one `compose` service. Existing configs
+  are unchanged until `--regenerate`.
+- The GitHub repository is now `PedroElizalde01/spinup`. Old URLs redirect; the
+  installer URL in this README is the new one.
+
 ### Added
 
 - Readiness conditions. A service can declare `ready: { port }`, `{ http }`,
@@ -146,6 +166,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original mode is preserved, intermediate files are private, and a symlinked
   config has its target replaced rather than the link becoming a regular file.
 - `spinup --help | head` no longer prints an EPIPE stack trace.
+- `install.sh --version` with a release older than v0.3.0 fails with an explanation
+  instead of requesting an asset that does not exist.
 - Compose files were chosen in the wrong order: with both `compose.yaml` and
   `docker-compose.yml` present, spinup described a different application than
   Compose runs. Override files and profiles are now respected.

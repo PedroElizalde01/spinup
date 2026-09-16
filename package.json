@@ -1,6 +1,6 @@
 {
   "name": "spinup",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Developer CLI that detects a project and launches its dev environment from anywhere.",
   "type": "module",
   "bin": {

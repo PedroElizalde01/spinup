@@ -88,7 +88,7 @@ asks for the command in a terminal and fails elsewhere; it never writes a guess.
 Latest release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PedroElizalde01/runit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/PedroElizalde01/spinup/main/install.sh | bash
 ```
 
 The installer supports Linux and macOS.
@@ -102,8 +102,8 @@ spinup --help
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PedroElizalde01/runit/main/install.sh | \
-  bash -s -- --version v0.3.0
+curl -fsSL https://raw.githubusercontent.com/PedroElizalde01/spinup/main/install.sh | \
+  bash -s -- --version v0.4.0
 ```
 
 If `spinup` is not found after install, add this to your shell profile:

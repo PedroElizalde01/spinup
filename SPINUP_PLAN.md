@@ -66,8 +66,8 @@ The GitHub README banner is done. Everything else below still says RUNIT or `run
 | B05 | ~~`RunitConfig` type name~~ | done `05d6c2a` | |
 | B06 | ~~Comments and canary names still say runit~~ | done `05d6c2a` | Compatibility names kept. |
 | B07 | ~~`favicon.svg` / `favicon.ico` draw an "r" glyph~~ | done `05d6c2a` | S mark, ICO is one PNG entry. |
-| B08 | GitHub repository is still `PedroElizalde01/runit` | remote, `install.sh:6`, README install URL, website URLs | See Q2. If renamed to `spinup`, GitHub redirects old URLs, but update `install.sh` `REPO`, README, and website constants anyway and keep a comment that the old name redirects. |
-| B09 | Old `runit` release assets | GitHub Releases v0.1.1–v0.2.2 | Leave as-is. `install.sh --version` for pre-rename tags must fail with "pre-rename release, install v0.3.0 or newer" (F22). |
+| B08 ✓ | ~~GitHub repository is still `PedroElizalde01/runit`~~ renamed to `spinup` 2026-09-16 | remote, `install.sh:6`, README install URL, website URLs | See Q2. If renamed to `spinup`, GitHub redirects old URLs, but update `install.sh` `REPO`, README, and website constants anyway and keep a comment that the old name redirects. |
+| B09 ✓ | Old `runit` release assets (installer refuses tags before v0.3.0) | GitHub Releases v0.1.1–v0.2.2 | Leave as-is. `install.sh --version` for pre-rename tags must fail with "pre-rename release, install v0.3.0 or newer" (F22). |
 
 **CLI glyph.** Same 2-row half-block font as the current RUNIT mark, 22 columns, fits
 the 60-column card:
@@ -109,7 +109,7 @@ Every user-facing string, constant, and identifier:
 | W10 ✓ | Brand icon "r" path | `components/brand-icon.tsx`, `app/icon.svg` | New S mark from Q1, same file in both places. |
 | W11 ✓ | GitHub, releases, install, and API URLs point to `runit` | `lib/content.ts:1–7` | Follow Q2. |
 | W12 ✓ | README title "RUNIT Website" | `README.md` | `SpinUp Website`. |
-| W13 | Remote repo `runit-front` | GitHub | Rename to `spinup-front` (approved, Q2). Manual step on GitHub, then update `origin`. |
+| W13 ✓ | Remote repo `runit-front` | GitHub | Renamed to `spinup-front` 2026-09-16; `origin` updated. |
 
 Tagline options for W03 and B02, pick one and use it in both places: "Spin up anywhere.",
 "One command. Whole stack.", "Your dev environment, from any directory."
@@ -320,7 +320,7 @@ Resolved 2026-09-16.
 | ID | Question | Decision |
 |---|---|---|
 | Q1 | Brand mark | **Change it.** Replace the "r" glyph with a new S mark, same circle and 20px stroke. One SVG for CLI favicon, site icon, OG image. |
-| Q2 | Rename GitHub repos | **Frontend: yes**, `runit-front` → `spinup-front` (W13). CLI repo `runit` stays for now; B08 deferred, `install.sh` and README keep the current URL. |
+| Q2 | Rename GitHub repos | **Done 2026-09-16.** `spinup` and `spinup-front`; installer, README and website URLs updated. |
 | Q3 | Website terminal art | **Match the CLI.** Revert the uncommitted ASCII diff, keep Unicode box-drawing and `✓`, render the SPINUP glyph and `spinup my-app` exactly as the CLI prints them (W04, W09, W18). Fix Windows font fallback in CSS. |
 | Q4 | npm publish | **Not yet.** E24 npm channel deferred. Homebrew tap and installer remain. |
 | Q5 | Docs location | **`docs/` in the CLI repo**, site consumes at build (W14). |
