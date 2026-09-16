@@ -1,0 +1,195 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import { execa } from "execa";
+
+import { cleanupTempDir, makeTempDir } from "./helpers.ts";
+
+// Drives the real CLI in a child process against an isolated registry, shim
+// directory and project, so these assertions cover routing, exit statuses and
+// the JSON contract end to end.
+const CLI = new URL("../src/cli.ts", import.meta.url).pathname;
+
+let root: string;
+let project: string;
+let env: NodeJS.ProcessEnv;
+
+const CONFIG = [
+  "version: 1",
+  "name: clitest",
+  "root: .",
+  "default: dev",
+  "actions:",
+  "  dev:",
+  "    mode: simple",
+  "    tasks:",
+  "      - name: app",
+  "        cwd: .",
+  "        cmd: touch started.txt",
+  "  migrate:",
+  "    mode: simple",
+  "    tasks:",
+  "      - name: db",
+  "        cwd: .",
+  "        cmd: \"true\"",
+  "      - name: schema",
+  "        cwd: .",
+  "        cmd: \"true\"",
+  "        dependsOn: [db]",
+  "  broken:",
+  "    mode: simple",
+  "    tasks:",
+  "      - name: nowhere",
+  "        cwd: does-not-exist",
+  "        cmd: \"true\"",
+  "  failing:",
+  "    mode: simple",
+  "    tasks:",
+  "      - name: code",
+  "        cwd: .",
+  "        cmd: exit 42",
+  "",
+].join("\n");
+
+beforeEach(async () => {
+  root = await makeTempDir("spinup-cli-");
+  project = path.join(root, "project");
+  await mkdir(path.join(root, "config"), { recursive: true });
+  await mkdir(path.join(root, "bin"), { recursive: true });
+  await mkdir(project, { recursive: true });
+  await writeFile(path.join(project, ".spinup.yml"), CONFIG);
+
+  env = {
+    ...process.env,
+    HOME: root,
+    XDG_CONFIG_HOME: path.join(root, "config"),
+    SPINUP_SHIM_DIR: path.join(root, "bin"),
+    NO_COLOR: "1",
+  };
+});
+
+afterEach(async () => {
+  await cleanupTempDir(root);
+});
+
+async function spinup(args: string[], cwd = project) {
+  return execa("bun", ["run", CLI, ...args], { cwd, env, reject: false, stdin: "ignore" });
+}
+
+async function register(): Promise<void> {
+  const result = await spinup(["clitest"]);
+  if (result.exitCode !== 0) {
+    throw new Error(`registration failed (exit ${result.exitCode}):\n${result.stdout}\n${result.stderr}`);
+  }
+}
+
+describe("cli routing and contract", () => {
+  test("registers, then lists the project with its default action", async () => {
+    await register();
+
+    const list = await spinup(["--list", "--json"]);
+    expect(list.exitCode).toBe(0);
+    const rows = JSON.parse(String(list.stdout)) as unknown[];
+    expect(rows).toEqual([{ alias: "clitest", root: project, config: "ok", defaultAction: "dev", mode: "simple", actions: ["dev", "migrate", "broken", "failing"] }]);
+  });
+
+  test("--action selects a generated action for inspection", async () => {
+    await register();
+
+    const plan = await spinup(["clitest", "--plan", "--action", "migrate", "--json"]);
+    expect(plan.exitCode).toBe(0);
+    const report = JSON.parse(String(plan.stdout)) as { action: string; order: Array<{ name: string; cwd: string }> };
+    expect(report.action).toBe("migrate");
+    expect(report.order.map((step) => step.name)).toEqual(["db", "schema"]);
+    expect(report.order[0]!.cwd).toBe(project);
+
+    const graph = await spinup(["clitest", "--graph", "--action", "migrate"]);
+    expect(graph.stdout).toContain("schema depends on db");
+  });
+
+  test("an unknown action fails before anything happens and names the alternatives", async () => {
+    await register();
+
+    const result = await spinup(["clitest", "--plan", "--action", "nope"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Action "nope" is not defined');
+    expect(result.stderr).toContain("dev, migrate, broken, failing");
+  });
+
+  test("a management flag wins over the shim's --start", async () => {
+    await register();
+
+    // This is what `clitest --doctor` becomes through the generated wrapper.
+    const result = await spinup(["--start", "clitest", "--doctor", "--json"], root);
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(String(result.stdout)) as { action: string; actions: string[]; ready: boolean };
+    expect(report.action).toBe("dev");
+    expect(report.actions).toContain("migrate");
+    expect(report.ready).toBe(true);
+    await expect(Bun.file(path.join(project, "started.txt")).exists()).resolves.toBe(false);
+  });
+
+  test("--start never registers the current directory", async () => {
+    const result = await spinup(["--start", "orphan"], root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("not registered");
+
+    const list = await spinup(["--list", "--json"]);
+    expect(JSON.parse(String(list.stdout))).toEqual([]);
+  });
+
+  test("--dry-run resolves the launch and starts nothing", async () => {
+    await register();
+
+    const result = await spinup(["--start", "clitest", "--dry-run"], root);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Action: dev (simple)");
+    expect(result.stdout).toContain("touch started.txt");
+    expect(result.stdout).toContain("nothing was started");
+    await expect(Bun.file(path.join(project, "started.txt")).exists()).resolves.toBe(false);
+  });
+
+  test("a launch runs the selected action from any directory and passes its status through", async () => {
+    await register();
+
+    const ok = await spinup(["--start", "clitest"], root);
+    expect(ok.exitCode).toBe(0);
+    await expect(Bun.file(path.join(project, "started.txt")).exists()).resolves.toBe(true);
+
+    const failing = await spinup(["--start", "clitest", "--action", "failing"], root);
+    expect(failing.exitCode).toBe(42);
+  });
+
+  test("diagnostics exit 2 when the action cannot run", async () => {
+    await register();
+
+    const check = await spinup(["clitest", "--check", "--action", "broken", "--json"]);
+    expect(check.exitCode).toBe(2);
+    const report = JSON.parse(String(check.stdout)) as { ready: boolean; problems: string[] };
+    expect(report.ready).toBe(false);
+    expect(report.problems.join("\n")).toContain("does-not-exist");
+
+    const doctor = await spinup(["clitest", "--doctor", "--action", "broken"]);
+    expect(doctor.exitCode).toBe(2);
+    expect(doctor.stdout).toContain("not ready");
+  });
+
+  test("--json is refused where there is no report", async () => {
+    await register();
+    const result = await spinup(["clitest", "--edit", "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--json applies to");
+  });
+
+  test("env inspection never prints values", async () => {
+    await register();
+    await writeFile(path.join(project, ".env"), "SECRET_TOKEN=hunter2\n");
+
+    const result = await spinup(["clitest", "--env", "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("hunter2");
+    const report = JSON.parse(String(result.stdout)) as { keys: unknown[] };
+    expect(report.keys).toEqual([{ key: "SECRET_TOKEN", origin: ".env", shadowedByShell: false }]);
+  });
+});

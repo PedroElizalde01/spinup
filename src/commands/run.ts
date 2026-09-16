@@ -2,7 +2,16 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { backupConfig, CONFIG_FILENAME, configExists, getConfigPath, loadConfig, saveConfig, stringifyConfig } from "../core/config.ts";
+import {
+  backupConfig,
+  CONFIG_FILENAME,
+  configExists,
+  formatConfigError,
+  getConfigPath,
+  loadConfig as loadConfigRaw,
+  saveConfig,
+  stringifyConfig,
+} from "../core/config.ts";
 import { buildDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
@@ -12,12 +21,26 @@ import { confirmAction } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
+import { colorEnabled } from "../ui/output.ts";
+import { buildExecutionPlan, renderExecutionPlan } from "./doctor.ts";
+import { selectAction, sessionNameFor } from "./shared.ts";
 import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
 import { GLYPH } from "../ui/brand.ts";
+
+/** A config problem is a user-facing message, not a serialized issue list. */
+async function loadConfig(projectRoot: string): Promise<SpinupConfig> {
+  try {
+    return await loadConfigRaw(projectRoot);
+  } catch (error) {
+    throw new Error(formatConfigError(error));
+  }
+}
 
 type RunProjectOptions = {
   regenerate?: boolean;
   start?: boolean;
+  action?: string;
+  dryRun?: boolean;
 };
 
 type EnsureProjectReadyResult = {
@@ -36,7 +59,6 @@ type BootstrapProjectOptions = {
 const BOX_WIDTH = 62;
 const BOX_INNER_WIDTH = BOX_WIDTH - 2;
 const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
-const COLOR_ENABLED = process.stdout.isTTY && process.env.NO_COLOR === undefined;
 
 const ANSI = {
   reset: "\x1b[0m",
@@ -332,6 +354,12 @@ async function ensureProjectReady(alias: string, options: RunProjectOptions): Pr
   const projectRoot = registeredProjectRoot ? path.resolve(registeredProjectRoot) : process.cwd();
   const hasConfig = await configExists(projectRoot);
 
+  if (!registeredProjectRoot && options.start) {
+    // A launch never registers: an orphaned wrapper must not adopt whatever
+    // directory it happened to be run from.
+    throw new Error(`Project alias "${alias}" is not registered. Register it from its directory with: spinup ${alias}`);
+  }
+
   if (!registeredProjectRoot) {
     const configMode = !hasConfig ? "generate" : options.regenerate ? "regenerate" : "keep";
     await bootstrapProject(alias, projectRoot, configMode, { quiet: true });
@@ -362,7 +390,7 @@ function compactHome(projectPath: string): string {
 }
 
 function colorize(value: string, ...codes: string[]): string {
-  if (!COLOR_ENABLED || value.length === 0) {
+  if (!colorEnabled() || value.length === 0) {
     return value;
   }
 
@@ -493,6 +521,7 @@ function printSetupCard(
     ...field("frameworks", colorize(formatList(detection.frameworks), ANSI.white)),
     ...field("services", colorize(formatList(detection.services.map((service) => service.name)), ANSI.white)),
     border("middle"),
+    ...field("actions", colorize(Object.keys(config.actions).map((name) => (name === config.default ? `${name} (default)` : name)).join(", "), ANSI.white)),
     ...summarizeAction(config.default, action).flatMap(([label, value]) =>
       field(label, colorize(value, label === "mode" ? ANSI.bold : ANSI.white, label === "mode" && value === "tmux" ? ANSI.cyan : ANSI.white)),
     ),
@@ -506,12 +535,31 @@ function printSetupCard(
   }
 }
 
-async function startConfiguredProject(alias: string, projectRoot: string): Promise<void> {
+async function startConfiguredProject(alias: string, projectRoot: string, options: RunProjectOptions): Promise<void> {
   const config = await loadConfig(projectRoot);
-  const action = config.actions[config.default];
+  const { actionName, action } = selectAction(config, options.action);
   // Environment files live next to the action's root, not necessarily the
   // directory the project was registered from.
-  const env = await loadEnv(path.resolve(projectRoot, config.root), config.default);
+  const env = await loadEnv(path.resolve(projectRoot, config.root), actionName);
+
+  if (options.dryRun) {
+    // Everything a launch resolves, nothing a launch starts.
+    renderExecutionPlan(buildExecutionPlan(projectRoot, config, actionName));
+    console.log("\nEnvironment:");
+    console.log(`  files: ${env.files.length > 0 ? env.files.join(", ") : "(none)"}`);
+
+    for (const key of Object.keys(env.values).sort()) {
+      const note = env.shadowed.includes(key) ? " (overridden by the shell)" : "";
+      console.log(`  ${key} [${env.origins[key]}]${note}`);
+    }
+
+    if (action.mode === "tmux") {
+      console.log(`\ntmux session: ${sessionNameFor(alias, config, actionName)}`);
+    }
+
+    console.log("\n[dry-run] nothing was started");
+    return;
+  }
 
   console.log(
     env.files.length > 0
@@ -537,9 +585,9 @@ async function startConfiguredProject(alias: string, projectRoot: string): Promi
     console.log("[run] starting dev environment...");
   }
 
-  await executeAction(projectRoot, config, config.default, {
+  await executeAction(projectRoot, config, actionName, {
     environment: env.applied,
-    sessionName: alias,
+    sessionName: sessionNameFor(alias, config, actionName),
   });
 }
 
@@ -547,7 +595,7 @@ export async function runProject(alias: string, options: RunProjectOptions = {})
   const { projectRoot, bootstrapped } = await ensureProjectReady(alias, options);
 
   if (options.start) {
-    await startConfiguredProject(alias, projectRoot);
+    await startConfiguredProject(alias, projectRoot, options);
     return;
   }
 

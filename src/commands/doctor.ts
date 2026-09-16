@@ -1,28 +1,45 @@
 import path from "node:path";
 
-import { CONFIG_FILENAME, configExists, formatConfigError, getConfigPath, loadConfig } from "../core/config.ts";
-import { visualizeDependencyGraph } from "../core/dependencies.ts";
+import { buildDependencyGraph, visualizeDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
+import { getConfigPath } from "../core/config.ts";
 import { checkTools, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
-import { getProject } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
 import type { Action, SpinupConfig } from "../types/config.ts";
+import { emit, EXIT } from "../ui/output.ts";
+import { actionEntries, loadRegisteredProject, resolveActionRoot, selectAction } from "./shared.ts";
 
-function requireRegisteredProjectMessage(alias: string): string {
-  return `Project alias "${alias}" not registered`;
+type InspectOptions = {
+  action?: string;
+};
+
+export type PlanStep = {
+  name: string;
+  cwd: string;
+  cmd: string;
+  dependsOn: string[];
+  delay: number;
+};
+
+export type ExecutionPlan = {
+  action: string;
+  mode: Action["mode"];
+  root: string;
+  /** In the order services will be started. */
+  order: PlanStep[];
+  windows?: Array<{ name: string; layout?: string; panes: string[] }>;
+};
+
+function formatCheck(installed: boolean): string {
+  return installed ? "✓" : "✗";
 }
 
-function requireConfigMessage(alias: string): string {
-  return `${CONFIG_FILENAME} not found\nRegenerate using:\n\nspinup ${alias} -r`;
-}
-
-function getActionServiceCount(action: Action): number {
-  if (action.mode === "tmux") {
-    return action.windows.reduce((total, window) => total + window.panes.length, 0);
-  }
-
-  return action.tasks?.length ?? 0;
+function printBanner(title: string): void {
+  const line = "-".repeat(title.length + 4);
+  console.log(`+${line}+`);
+  console.log(`|  ${title}  |`);
+  console.log(`+${line}+\n`);
 }
 
 function printList(values: string[]): void {
@@ -36,206 +53,202 @@ function printList(values: string[]): void {
   }
 }
 
-function formatCheck(installed: boolean): string {
-  return installed ? "✓" : "✗";
-}
+/**
+ * What a launch will do, resolved the same way the launch resolves it: the
+ * selected action, its dependency order and every path made absolute.
+ */
+export function buildExecutionPlan(projectRoot: string, config: SpinupConfig, actionName: string): ExecutionPlan {
+  const { action } = selectAction(config, actionName);
+  const root = resolveActionRoot(projectRoot, config);
+  const order = buildDependencyGraph(actionEntries(action)).map((item) => ({
+    name: item.name,
+    cwd: path.resolve(root, item.cwd),
+    cmd: item.cmd,
+    dependsOn: item.dependsOn ?? [],
+    delay: item.delay ?? 0,
+  }));
 
-function printBanner(title: string): void {
-  const line = "-".repeat(title.length + 4);
-  console.log(`+${line}+`);
-  console.log(`|  ${title}  |`);
-  console.log(`+${line}+\n`);
-}
-
-export function printExecutionPlanFromConfig(config: SpinupConfig): void {
-  printBanner("Execution Plan");
-  const action = config.actions[config.default];
-  console.log(`Mode: ${action.mode}\n`);
+  const plan: ExecutionPlan = { action: actionName, mode: action.mode, root, order };
 
   if (action.mode === "tmux") {
-    for (const window of action.windows) {
-      console.log(`Window: ${window.name}`);
+    plan.windows = action.windows.map((window) => ({
+      name: window.name,
+      layout: window.layout,
+      panes: window.panes.map((pane) => pane.name),
+    }));
+  }
 
-      for (const pane of window.panes) {
-        console.log(`  pane ${pane.name} -> ${pane.cmd} (${pane.cwd})`);
-      }
+  return plan;
+}
 
-      console.log("");
+export function renderExecutionPlan(plan: ExecutionPlan): void {
+  console.log(`Action: ${plan.action} (${plan.mode})`);
+  console.log(`Root:   ${plan.root}\n`);
+  console.log("Start order:");
+
+  for (const [index, step] of plan.order.entries()) {
+    const after = step.dependsOn.length > 0 ? `  after ${step.dependsOn.join(", ")}` : "";
+    const delay = step.delay > 0 ? `  then wait ${step.delay}ms` : "";
+    console.log(`  ${index + 1}. ${step.name}${after}${delay}`);
+    console.log(`     cwd ${step.cwd}`);
+    console.log(`     ${step.cmd}`);
+  }
+
+  if (plan.windows) {
+    console.log("\nWindows:");
+
+    for (const window of plan.windows) {
+      console.log(`  ${window.name}${window.layout ? ` (${window.layout})` : ""}: ${window.panes.join(", ")}`);
     }
-
-    return;
-  }
-
-  for (const task of action.tasks ?? []) {
-    console.log(`Task: ${task.name} -> ${task.cmd} (${task.cwd})`);
   }
 }
 
-function getDefaultActionItems(config: SpinupConfig) {
-  const action = config.actions[config.default];
-  return action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
+export async function previewProjectPlan(alias: string, options: InspectOptions = {}): Promise<void> {
+  const { projectRoot, config } = await loadRegisteredProject(alias);
+  const { actionName } = selectAction(config, options.action);
+  const plan = buildExecutionPlan(projectRoot, config, actionName);
+
+  emit(plan, () => {
+    printBanner("Execution Plan");
+    renderExecutionPlan(plan);
+  });
 }
 
-export async function previewProjectPlan(alias: string): Promise<void> {
-  const projectRoot = await getProject(alias);
+export async function previewProjectGraph(alias: string, options: InspectOptions = {}): Promise<void> {
+  const { config } = await loadRegisteredProject(alias);
+  const { actionName, action } = selectAction(config, options.action);
+  const entries = actionEntries(action);
+  const report = {
+    action: actionName,
+    services: buildDependencyGraph(entries).map((item) => ({ name: item.name, dependsOn: item.dependsOn ?? [] })),
+  };
 
-  if (!projectRoot) {
-    throw new Error(requireRegisteredProjectMessage(alias));
-  }
-
-  if (!(await configExists(projectRoot))) {
-    throw new Error(requireConfigMessage(alias));
-  }
-
-  try {
-    const config = await loadConfig(projectRoot);
-    printExecutionPlanFromConfig(config);
-  } catch (error) {
-    throw new Error(formatConfigError(error));
-  }
-}
-
-export async function previewProjectGraph(alias: string): Promise<void> {
-  const projectRoot = await getProject(alias);
-
-  if (!projectRoot) {
-    throw new Error(requireRegisteredProjectMessage(alias));
-  }
-
-  if (!(await configExists(projectRoot))) {
-    throw new Error(requireConfigMessage(alias));
-  }
-
-  try {
-    const config = await loadConfig(projectRoot);
+  emit(report, () => {
     printBanner("Service Graph");
-    console.log(visualizeDependencyGraph(getDefaultActionItems(config)));
-  } catch (error) {
-    throw new Error(formatConfigError(error));
-  }
+    console.log(`Action: ${actionName}\n`);
+    console.log(visualizeDependencyGraph(entries));
+  });
 }
 
-export async function previewProjectEnv(alias: string): Promise<void> {
-  const projectRoot = await getProject(alias);
+export async function previewProjectEnv(alias: string, options: InspectOptions = {}): Promise<void> {
+  const { projectRoot, config } = await loadRegisteredProject(alias);
+  const { actionName } = selectAction(config, options.action);
+  const env = await loadEnv(resolveActionRoot(projectRoot, config), actionName);
+  const keys = Object.keys(env.values)
+    .sort((left, right) => left.localeCompare(right))
+    .map((key) => ({ key, origin: env.origins[key]!, shadowedByShell: env.shadowed.includes(key) }));
+  // Values are never part of the report, in either format.
+  const report = { action: actionName, files: env.files, ignored: env.ignored, keys };
 
-  if (!projectRoot) {
-    throw new Error(requireRegisteredProjectMessage(alias));
-  }
-
-  if (!(await configExists(projectRoot))) {
-    throw new Error(requireConfigMessage(alias));
-  }
-
-  try {
-    const config = await loadConfig(projectRoot);
-    const env = await loadEnv(path.resolve(projectRoot, config.root), config.default);
-
+  emit(report, () => {
     printBanner("Environment");
-    console.log(`Action: ${config.default}`);
+    console.log(`Action: ${actionName}`);
     console.log(`Files:  ${env.files.length > 0 ? env.files.join(", ") : "(none)"}\n`);
 
     for (const ignoredFile of env.ignored) {
-      console.log(`${ignoredFile} is present but not read by action "${config.default}".`);
+      console.log(`${ignoredFile} is present but not read by action "${actionName}".`);
     }
 
     if (env.ignored.length > 0) {
       console.log("");
     }
 
-    const entries = Object.keys(env.values).sort((left, right) => left.localeCompare(right));
-
-    if (entries.length === 0) {
+    if (keys.length === 0) {
       console.log("(no variables)");
       return;
     }
 
     console.log("Loaded environment variables:\n");
 
-    // Values stay masked; only the key and where it came from are shown.
-    for (const key of entries) {
-      const origin = env.origins[key];
-      const note = env.shadowed.includes(key) ? " (overridden by the shell)" : "";
-      console.log(`${key}=*** [${origin}]${note}`);
+    for (const entry of keys) {
+      const note = entry.shadowedByShell ? " (overridden by the shell)" : "";
+      console.log(`${entry.key}=*** [${entry.origin}]${note}`);
     }
-  } catch (error) {
-    throw new Error(formatConfigError(error));
-  }
+  });
 }
 
-export async function doctorProject(alias: string): Promise<void> {
-  const projectRoot = await getProject(alias);
-
-  if (!projectRoot) {
-    throw new Error(requireRegisteredProjectMessage(alias));
-  }
-
-  const configPresent = await configExists(projectRoot);
-
-  if (!configPresent) {
-    throw new Error(requireConfigMessage(alias));
-  }
-
-  let config;
-
-  try {
-    config = await loadConfig(projectRoot);
-  } catch (error) {
-    throw new Error(formatConfigError(error));
-  }
-
+export async function doctorProject(alias: string, options: InspectOptions = {}): Promise<void> {
+  const { projectRoot, config } = await loadRegisteredProject(alias);
+  const { actionName, action } = selectAction(config, options.action);
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
-  const actionName = config.default;
   const requiredTools = inferRequiredTools(config, detection, actionName);
   const tools = await checkTools([...new Set(["tmux", "docker", ...requiredTools])]);
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   const missingRequired = requiredTools.filter((name) => toolMap.get(name)?.installed !== true);
-  const warnings = [
+  const problems = [
     ...(await validateConfigPaths(projectRoot, config, actionName)),
     ...missingRequired.map((name) => `${name} is required by action "${actionName}" but is not installed.`),
   ];
-  const configuredServices = getDefaultActionItems(config).map((item) => item.name);
+  const services = actionEntries(action).map((item) => item.name);
+  const usesDocker = detection.services.some((service) => service.runtime === "docker");
 
-  printBanner("Project Doctor");
-  console.log(`Project: ${alias}`);
-  console.log(`Path: ${projectRoot}\n`);
+  const report = {
+    alias,
+    path: projectRoot,
+    configPath: getConfigPath(projectRoot),
+    version: config.version ?? 1,
+    actions: Object.keys(config.actions),
+    defaultAction: config.default,
+    action: actionName,
+    mode: action.mode,
+    services,
+    stack: detection.stack,
+    packageManager: detection.packageManager ?? null,
+    frameworks: detection.frameworks,
+    requiredTools,
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      required: requiredTools.includes(tool.name),
+      installed: tool.installed,
+      resolvedCommand: tool.resolvedCommand ?? null,
+    })),
+    problems,
+    ready: problems.length === 0,
+  };
 
-  console.log("Config file:");
-  console.log(`  ${getConfigPath(projectRoot)} ${formatCheck(true)}\n`);
-
-  console.log("Stack detection:");
-  console.log(`  ${detection.stack} ${formatCheck(detection.stack !== "unknown")}`);
-  console.log(`  prisma ${formatCheck(detection.prisma)}`);
-  console.log(`  docker ${formatCheck(detection.services.some((service) => service.runtime === "docker"))}\n`);
-
-  console.log("Services detected:");
-  printList(configuredServices);
-  console.log("");
-
-  if (detection.packageManager) {
-    console.log("Package manager:");
-    console.log(`  ${detection.packageManager}\n`);
+  if (!report.ready) {
+    process.exitCode = EXIT.notReady;
   }
 
-  console.log(`Tmux: ${requiredTools.includes("tmux") ? "required" : "not required"}`);
-  console.log(`  installed ${formatCheck(toolMap.get("tmux")?.installed === true)}\n`);
+  emit(report, () => {
+    printBanner("Project Doctor");
+    console.log(`Project: ${alias}`);
+    console.log(`Path: ${projectRoot}\n`);
 
-  console.log("Docker:");
-  console.log(`  installed ${formatCheck(toolMap.get("docker")?.installed === true)}\n`);
+    console.log("Config file:");
+    console.log(`  ${report.configPath} ${formatCheck(true)}\n`);
 
-  if (detection.services.some((service) => service.runtime === "docker") && toolMap.get("docker")?.installed !== true) {
-    console.log("Docker compose detected but Docker not installed\n");
-  }
+    console.log("Actions:");
+    printList(report.actions.map((name) => (name === config.default ? `${name} (default)` : name)));
+    console.log(`\nInspecting: ${actionName} (${action.mode})\n`);
 
-  console.log("Status:");
-  // "ready" previously ignored missing required tools entirely.
-  console.log(`  ${warnings.length === 0 ? "ready" : "not ready"}`);
+    console.log("Stack detection:");
+    console.log(`  ${detection.stack} ${formatCheck(detection.stack !== "unknown")}`);
+    console.log(`  prisma ${formatCheck(detection.prisma)}`);
+    console.log(`  docker ${formatCheck(usesDocker)}\n`);
 
-  if (warnings.length > 0) {
-    console.log("\nProblems:");
-    printList(warnings);
-    process.exitCode = 1;
-  }
+    console.log("Services in this action:");
+    printList(services);
+    console.log("");
 
-  console.log(`\nDefault action services: ${getActionServiceCount(config.actions[config.default])}`);
+    if (detection.packageManager) {
+      console.log("Package manager:");
+      console.log(`  ${detection.packageManager}\n`);
+    }
+
+    console.log(`Tmux: ${requiredTools.includes("tmux") ? "required" : "not required"}`);
+    console.log(`  installed ${formatCheck(toolMap.get("tmux")?.installed === true)}\n`);
+
+    console.log(`Docker: ${requiredTools.includes("docker") ? "required" : "not required"}`);
+    console.log(`  installed ${formatCheck(toolMap.get("docker")?.installed === true)}\n`);
+
+    console.log("Status:");
+    console.log(`  ${report.ready ? "ready" : "not ready"}`);
+
+    if (problems.length > 0) {
+      console.log("\nProblems:");
+      printList(problems);
+    }
+  });
 }

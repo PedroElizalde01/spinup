@@ -11,6 +11,7 @@ import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
 import { runProject } from "./commands/run.ts";
 import { exitCodeFor, Interrupted } from "./core/executor.ts";
+import { EXIT, setJsonMode } from "./ui/output.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
 import { createShim, needsShimRefresh, reclaimLegacyShim } from "./core/shim.ts";
 import { banner } from "./ui/brand.ts";
@@ -70,12 +71,16 @@ async function migrateRegistry(): Promise<void> {
 }
 
 type CliOptions = {
+  action?: string;
   check?: boolean;
+  color?: boolean;
   doctor?: boolean;
+  dryRun?: boolean;
   env?: boolean;
   edit?: boolean;
   graph?: boolean;
   interactive?: boolean;
+  json?: boolean;
   list?: boolean;
   plan?: boolean;
   regenerate?: boolean;
@@ -92,6 +97,11 @@ process.stdout.on("error", (error: NodeJS.ErrnoException) => {
   throw error;
 });
 
+// Read before anything renders: the setup card and the banner check NO_COLOR.
+if (process.argv.includes("--no-color")) {
+  process.env.NO_COLOR = "1";
+}
+
 const program = new Command();
 
 program
@@ -103,7 +113,10 @@ program
   .allowExcessArguments(false)
   .addHelpText("beforeAll", banner)
   .argument("[alias]", "registered project alias")
+  // The generated command passes --start. It means "launch unless a management
+  // flag was given", so `my-app --doctor` inspects instead of launching.
   .addOption(new Option("--start", "start the registered project").hideHelp())
+  .option("-a, --action <name>", "act on this action instead of the default")
   .option("--check", "validate required tools for a registered project")
   .option("--doctor", "inspect a registered project")
   .option("--env", "show loaded environment variables")
@@ -111,87 +124,97 @@ program
   .option("--graph", "show service dependency graph")
   .option("--interactive", "use interactive prompts with --edit")
   .option("--plan", "preview the execution plan")
+  .option("--dry-run", "with --start: resolve everything and start nothing")
+  .option("--json", "print inspection results as JSON")
+  .option("--no-color", "disable colored output")
   .option("-r, --regenerate", "re-scan the project and overwrite the project config")
   .option("--remove", "remove a registered project and its shim")
   .option("--list", "list registered projects")
   .action(async (alias: string | undefined, options: CliOptions) => {
     await migrateRegistry();
+    setJsonMode(Boolean(options.json));
 
-    const activeFlags = [
-      options.check,
-      options.doctor,
-      options.env,
-      options.edit,
-      options.graph,
-      options.list,
-      options.plan,
-      options.remove,
-      options.start,
-    ].filter(Boolean).length;
+    const management = {
+      check: options.check,
+      doctor: options.doctor,
+      env: options.env,
+      edit: options.edit,
+      graph: options.graph,
+      list: options.list,
+      plan: options.plan,
+      remove: options.remove,
+    };
+    const active = Object.entries(management)
+      .filter(([, enabled]) => enabled)
+      .map(([name]) => name);
 
-    if (activeFlags > 1) {
+    if (active.length > 1) {
       throw new Error("Use only one primary action flag at a time.");
     }
 
-    if (options.list) {
-      await listRegisteredProjects();
-      return;
+    const primary = active[0] ?? (options.start ? "start" : alias ? "register" : "help");
+    const inspecting = ["check", "doctor", "env", "graph", "plan", "list"].includes(primary);
+
+    if (options.json && !inspecting) {
+      throw new Error("--json applies to --list, --plan, --graph, --env, --check and --doctor.");
     }
 
-    if (!alias) {
-      if (activeFlags === 0 && !options.interactive && !options.regenerate) {
-        // Bare `spinup` is a request for orientation, not an error.
-        program.outputHelp();
-        return;
-      }
+    if (options.action && !["start", "check", "doctor", "env", "graph", "plan"].includes(primary)) {
+      throw new Error("--action applies to launching, --plan, --graph, --env, --check and --doctor.");
+    }
 
-      throw new Error("An alias is required unless --list is used.");
+    if (options.dryRun && primary !== "start") {
+      throw new Error("--dry-run applies to launching only (with --start).");
     }
 
     if (options.interactive && !options.edit) {
       throw new Error("--interactive can only be used with --edit.");
     }
 
-    if (options.regenerate && (options.check || options.doctor || options.env || options.edit || options.graph || options.list || options.plan || options.remove)) {
-      throw new Error("--regenerate can only be used when running a project.");
+    if (options.regenerate && primary !== "register" && primary !== "start") {
+      throw new Error("--regenerate can only be used when registering or launching a project.");
     }
 
-    if (options.check) {
-      await checkProject(alias);
+    if (primary === "help") {
+      // Bare `spinup` is a request for orientation, not an error.
+      program.outputHelp();
       return;
     }
 
-    if (options.doctor) {
-      await doctorProject(alias);
+    if (primary === "list") {
+      await listRegisteredProjects();
       return;
     }
 
-    if (options.env) {
-      await previewProjectEnv(alias);
-      return;
+    if (!alias) {
+      throw new Error("An alias is required unless --list is used.");
     }
 
-    if (options.edit) {
-      await editProject(alias, { interactive: options.interactive });
-      return;
-    }
+    const selected = { action: options.action };
 
-    if (options.graph) {
-      await previewProjectGraph(alias);
-      return;
+    switch (primary) {
+      case "check":
+        return checkProject(alias, selected);
+      case "doctor":
+        return doctorProject(alias, selected);
+      case "env":
+        return previewProjectEnv(alias, selected);
+      case "graph":
+        return previewProjectGraph(alias, selected);
+      case "plan":
+        return previewProjectPlan(alias, selected);
+      case "edit":
+        return editProject(alias, { interactive: options.interactive });
+      case "remove":
+        return removeRegisteredProject(alias);
+      default:
+        return runProject(alias, {
+          regenerate: options.regenerate,
+          start: options.start,
+          action: options.action,
+          dryRun: options.dryRun,
+        });
     }
-
-    if (options.plan) {
-      await previewProjectPlan(alias);
-      return;
-    }
-
-    if (options.remove) {
-      await removeRegisteredProject(alias);
-      return;
-    }
-
-    await runProject(alias, { regenerate: options.regenerate, start: options.start });
   });
 
 try {
@@ -200,5 +223,5 @@ try {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(error instanceof Interrupted ? `[run] ${message}\n` : `${message}\n`);
   // A task's own status, 130/143 for a handled signal, 1 for everything else.
-  process.exitCode = exitCodeFor(error);
+  process.exitCode = exitCodeFor(error) || EXIT.usage;
 }
