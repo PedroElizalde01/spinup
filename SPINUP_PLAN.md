@@ -139,13 +139,13 @@ code has landed. "Partial" means part of the acceptance criteria is met.
 
 | ID | Defect | Status | Remaining work |
 |---|---|---|---|
-| F15/R5 | Env precedence, `.env.development` for every action, global mutation | **Mostly fixed in `209d45d`** | tmux still inherits stale server env. Launch panes with a clean explicit environment; preserve `TMUX_PANE`. Source-mode Bun dotenv policy. |
-| F16 | Diagnostics exit 0 on unusable env | **Mostly fixed in `209d45d`** | Reuse F17 semantic validation once it exists so cycles and blank commands also fail `--check`. |
-| F18 | No `--action` selector, shim forces `--start` | Partial | Add `--action <name>` for start/plan/graph/env/check/doctor. Wrapper passes `--from-shim` marker; start becomes default only when no management flag given. List actions in `--doctor`. |
-| F17 | Validation not strict: unknown keys dropped, cycles pass, blank commands pass, wrong pane indexes in errors | Open | `.strict()` on every Zod object, nonblank strings, env key regex `^[A-Za-z_][A-Za-z0-9_]*$`, cycle detection at load. Graph prints real edges. Plan prints resolved order, cwd, deps, delays. |
-| F09 | Output prefixer ignores `sink.write()` backpressure | Partial | `Transform` stream with pending-line bound, pipe with backpressure, listener cleanup on cancel. |
+| F15/R5 | Env precedence, `.env.development` for every action, global mutation | **Fixed 2026-09-16** | One effective env for both backends; session-level `-r` hides stale server keys; `TMUX_PANE` left to tmux. Source-mode Bun dotenv policy still undocumented. |
+| F16 | Diagnostics exit 0 on unusable env | **Fixed 2026-09-16** | Strict load validation covers cycles and blank commands; `--check`/`--doctor` exit 2 for the selected action. |
+| F18 | No `--action` selector, shim forces `--start` | **Fixed 2026-09-16** | `--action` everywhere; `--start` is the marker and yields to management flags; explicit start never registers; doctor and the setup card list actions. |
+| F17 | Validation not strict: unknown keys dropped, cycles pass, blank commands pass, wrong pane indexes in errors | **Fixed 2026-09-16** | Strict schema, cycle detection at load, real pane paths, graph with real edges, plan with order/cwd/deps/delays. |
+| F09 | Output prefixer ignores `sink.write()` backpressure | **Fixed 2026-09-16** | `LinePrefixer` Transform in a pipe chain; slow-sink regression. |
 | F10 | `dependsOn` is start order, not readiness | Open | See E03. Do not redefine `dependsOn` silently. |
-| F11 | tmux assumes `base-index 0`, ignores small terminals | Open | Read `base-index`/`pane-base-index` via `show-options`, use returned pane IDs not indexes, check `-x/-y` against layout, fail with a clear message on "no space for new pane". |
+| F11 | tmux assumes `base-index 0`, ignores small terminals | **Fixed 2026-09-16** | Ids were already used; session created with terminal size or 200x50; base-index 1 regression; `TmuxError` names the failing split. |
 
 ### 3.3 P1 detection and Compose
 
@@ -167,11 +167,11 @@ code has landed. "Partial" means part of the acceptance criteria is met.
 
 | ID | Defect | Location | Fix |
 |---|---|---|---|
-| N01 | `spinup --list` output is bare `alias -> path`, no stack, action, or config status | `src/commands/list.ts` | Table with alias, root, config file present, default action, mode. `--json` variant (E02). |
+| N01 | ~~`spinup --list` output is bare~~ | done `60a4b11` | |
 | N02 | ~~done `2f069e2`~~ Website fetches GitHub API on every request with `force-dynamic` and `no-store`; unauthenticated limit is 60/hour per IP, so the badge disappears under any traffic | `app/page.tsx` | `next: { revalidate: 600 }` and drop `force-dynamic`. Fallback to `RELEASES_URL` already exists. |
-| N03 | `printSetupCard` writes to `console.log` (stdout) while migration notices go to stderr; mixed streams break `--json` later | `src/commands/run.ts`, `src/cli.ts` | Route human output through one `ui` module that respects `--json` and `NO_COLOR`. |
+| N03 | ~~stdout/stderr mixing~~ | done `60a4b11` | `src/ui/output.ts` `emit()`; migration notices stay on stderr. |
 | N04 | ~~`--interactive` prompts are invoked without checking `process.stdin.isTTY`~~ | done `cad0c09` | |
-| N05 | `.spinup.yml` has no `$schema` or version field; future breaking changes have no migration hook | `src/types/config.ts` | Add optional `version: 1`. Missing means 1. |
+| N05 | ~~no version field~~ | done `53ceab6` | `version: 1` written; newer refused. |
 | N06 | `bun test` prints `[tmux] attach manually with: tmux attach -t api` from a real launch path during tests | `test/tmux-workspace.test.ts` | Tests run on a private socket, so harmless, but silence by asserting on captured output instead of letting it reach the runner's stdout. |
 | N07 | Website has no `robots.txt`, `sitemap`, OG image, or canonical URL | `app/` | See W14–W17. |
 | N08 | ~~Website `tsconfig.tsbuildinfo` is committed~~ | done `2f069e2` | |
@@ -187,12 +187,12 @@ acceptance check. Items marked "P##" map to review proposals.
 
 | ID | Feature | Depends on | Acceptance |
 |---|---|---|---|
-| E01 | **`--action <name>`** on start, plan, graph, env, check, doctor (P01, F18) | F17 | `spinup api --action prisma-migrate` runs that action; unknown action fails before any write. |
-| E02 | **`--json`** on list, plan, graph, env, check, doctor (P05) | N03 | stdout is only JSON, diagnostics on stderr, values masked, exit codes unchanged. Schema documented in `docs/json.md`. |
-| E04 | **Exit code contract** | F08 | 0 success, 1 usage/config, 2 missing tool, task exit code passthrough, 130/143 for signals. Documented and tested. |
-| E05 | **`--dry-run`** on start | E01 | Prints resolved commands, cwd, env key origins, tmux layout. Nothing spawned. |
+| E01 ✓ | **`--action <name>`** on start, plan, graph, env, check, doctor (P01, F18) | F17 | `spinup api --action prisma-migrate` runs that action; unknown action fails before any write. |
+| E02 ✓ | **`--json`** on list, plan, graph, env, check, doctor (P05) | N03 | stdout is only JSON, diagnostics on stderr, values masked, exit codes unchanged. Schema documented in `docs/json.md`. |
+| E04 ✓ | **Exit code contract** | F08 | 0 success, 1 usage/config, 2 missing tool, task exit code passthrough, 130/143 for signals. Documented and tested. |
+| E05 ✓ | **`--dry-run`** on start | E01 | Prints resolved commands, cwd, env key origins, tmux layout. Nothing spawned. |
 | E13 | **Shell completion** `spinup completion bash|zsh|fish` (P08) | E01 | Completes aliases from registry and actions from the alias's config. No daemon. |
-| E14 | **`NO_COLOR`, `SPINUP_COLOR`, `--no-color`** | N03 | Respected everywhere the card or prefixes are colored. |
+| E14 ✓ | **`NO_COLOR`, `--no-color`** | N03 | Respected everywhere the card or prefixes are colored. |
 
 ### 4.2 Lifecycle
 
@@ -272,7 +272,7 @@ and the current mismatch is visible to every user.
 | Milestone | Scope | Gate |
 |---|---|---|
 | **M1: safety + brand** (current branch) | **Done 2026-09-16** except native macOS runs. Closed F19, F05, F06, F02, F03, F08. Landed B01–B07, W01–W13, N02, N04, N08. Tests typecheck via `tsconfig.test.json`. | G01–G06, G08. All tests green on Linux CI. Website builds with zero `runit` strings outside the migration notes. |
-| **M2: contract** | F17, F18, F09, F11, F15 tmux env, F16 remainder. E01, E02, E04, E05, E14, N01, N03, N05. | G07. `--json` snapshot tests. Exit code matrix test. |
+| **M2: contract** | **Done 2026-09-16.** F17, F18, F09, F11, F15 tmux env, F16 remainder. E01, E02, E04, E05, E14, N01, N03, N05. | G07 met: `test/cli.test.ts` drives the real CLI for `--json`, `--action`, exit codes 1/2/42, `--dry-run`, shim routing. |
 | **M3: lifecycle + detection** | E03, E07, E08, F12, F13, F14, E06, E11, F10 resolution. | G09. Fixture matrix in `test/fixtures/`. Readiness sequence integration test on a private tmux socket. |
 | **M4: distribution** | F21, F22, E12, E22, E23, E25, E26, B08/B09 repo rename. | G10. Native macOS smoke results attached to the release. |
 | **M5: product** | E09, E10, E13, E15–E21, E24, E27, W14–W21. | Each item ships behind its own acceptance test. |

@@ -237,7 +237,7 @@ describe("output forwarding", () => {
   // The prefixer ignored sink.write()'s return value, so a slow consumer let the
   // parent queue the task's entire output in memory.
   test("a slow sink applies backpressure to the source", async () => {
-    const { PassThrough, Readable, Writable } = await import("node:stream");
+    const { PassThrough, Writable } = await import("node:stream");
     const { pipePrefixedOutput } = await import("../src/core/executor.ts");
 
     let buffered = 0;
@@ -258,7 +258,7 @@ describe("output forwarding", () => {
     });
 
     const source = new PassThrough({ highWaterMark: 4096 });
-    pipePrefixedOutput(source as unknown as Readable, "[slow] ", sink);
+    pipePrefixedOutput(source, "[slow] ", sink);
 
     // Push far more than the sink can absorb; a bounded pipe rejects writes.
     let rejected = 0;

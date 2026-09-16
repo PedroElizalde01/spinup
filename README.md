@@ -132,6 +132,20 @@ spinup my-app --edit --interactive
 spinup my-app --remove
 ```
 
+Every generated config can hold several actions (`dev`, `docker`, `prisma-migrate`,
+…). `--action` selects one for inspection or launch; the default action is used
+otherwise:
+
+```bash
+my-app --action prisma-migrate        # launch a non-default action
+spinup my-app --plan --action docker  # inspect exactly what that launch would do
+my-app --dry-run                      # resolve everything, start nothing
+```
+
+The generated command forwards its flags, so `my-app --doctor` inspects instead of
+launching. Inspection commands accept `--json` and then print one JSON document on
+stdout with nothing else; environment values are never included.
+
 Regenerate the config from the current project structure:
 
 ```bash
@@ -148,16 +162,20 @@ spinup --list
 
 - `spinup <alias>`: register if needed, otherwise report that the alias already exists
 - `spinup <alias> --regenerate`: rescan the repo and replace `.spinup.yml` after a preview and confirmation; the previous file is kept as `.spinup.yml.bak`
-- `spinup <alias> --doctor`: inspect config, stack detection, and tool availability
-- `spinup <alias> --check`: validate required tools and config paths
-- `spinup <alias> --plan`: print the execution plan
-- `spinup <alias> --graph`: show the dependency graph
-- `spinup <alias> --env`: show loaded environment variables with values masked
+- `spinup <alias> --doctor`: inspect config, actions, stack detection, and tool availability
+- `spinup <alias> --check`: validate required tools and config paths for the selected action
+- `spinup <alias> --plan`: print start order, resolved directories, dependencies and delays
+- `spinup <alias> --graph`: show each service with the services it depends on
+- `spinup <alias> --env`: show loaded environment keys and their origin, values masked
 - `spinup <alias> --edit`: open the config in `$EDITOR`
-- `spinup <alias> --edit --interactive`: edit the default action with prompts
+- `spinup <alias> --edit --interactive`: edit the default action with prompts, keeping comments
 - `spinup <alias> --remove`: remove the registered project and generated shim
-- `spinup --list`: list registered projects
+- `spinup --list`: list registered projects with their default action and config state
 - `spinup --version`: print the installed version
+
+Modifiers: `--action <name>` (launch, plan, graph, env, check, doctor), `--json`
+(list, plan, graph, env, check, doctor), `--dry-run` (launch), `--no-color` or the
+`NO_COLOR` environment variable.
 
 ## Exit status
 
@@ -165,6 +183,7 @@ spinup --list
 |---|---|
 | 0 | Success |
 | 1 | Usage, configuration or registration error |
+| 2 | `--check` or `--doctor` found the selected action cannot run |
 | _n_ | A task in a `simple` action exited with status _n_; spinup returns it unchanged |
 | 130 | Stopped by Ctrl+C after the tasks were shut down |
 | 143 | Stopped by SIGTERM after the tasks were shut down |
@@ -294,12 +313,22 @@ $ spinup my-app --plan
 |  Execution Plan  |
 +------------------+
 
-Mode: tmux
+Action: dev (tmux)
+Root:   /home/user/code/my-app
 
-Window: services
-  pane postgres -> docker compose up postgres (.)
-  pane api -> npm run dev (apps/api)
-  pane web -> npm run dev (apps/web)
+Start order:
+  1. postgres
+     cwd /home/user/code/my-app
+     docker compose up postgres
+  2. api  after postgres
+     cwd /home/user/code/my-app/apps/api
+     npm run dev
+  3. web  after postgres, api
+     cwd /home/user/code/my-app/apps/web
+     npm run dev
+
+Windows:
+  services (tiled): postgres, api, web
 ```
 
 ### `spinup my-app --graph`
@@ -310,11 +339,11 @@ $ spinup my-app --graph
 |  Service Graph  |
 +-----------------+
 
+Action: dev
+
 postgres
-  ↓
-api
-  ↓
-web
+api depends on postgres
+web depends on postgres, api
 ```
 
 ### `spinup my-app --env`
@@ -325,11 +354,14 @@ $ spinup my-app --env
 |  Environment  |
 +---------------+
 
+Action: dev
+Files:  .env, .env.local
+
 Loaded environment variables:
 
-API_URL=***
-DATABASE_URL=***
-SESSION_SECRET=***
+API_URL=*** [.env]
+DATABASE_URL=*** [.env.local]
+SESSION_SECRET=*** [.env] (overridden by the shell)
 ```
 
 ### `spinup my-app --edit`
@@ -439,21 +471,27 @@ Arguments:
   alias             registered project alias
 
 Options:
-  -v, --version     output the version number
-  --check           validate required tools for a registered project
-  --doctor          inspect a registered project
-  --env             show loaded environment variables
-  --edit            edit the project config
-  --graph           show service dependency graph
-  --interactive     use interactive prompts with --edit
-  --plan            preview the execution plan
-  -r, --regenerate  re-scan the project and overwrite .spinup.yml
-  --remove          remove a registered project and its shim
-  --list            list registered projects
-  -h, --help        display help for command
+  -v, --version        output the version number
+  -a, --action <name>  act on this action instead of the default
+  --check              validate required tools for a registered project
+  --doctor             inspect a registered project
+  --env                show loaded environment variables
+  --edit               edit the project config
+  --graph              show service dependency graph
+  --interactive        use interactive prompts with --edit
+  --plan               preview the execution plan
+  --dry-run            with --start: resolve everything and start nothing
+  --json               print inspection results as JSON
+  --no-color           disable colored output
+  -r, --regenerate     re-scan the project and overwrite the project config
+  --remove             remove a registered project and its shim
+  --list               list registered projects
+  -h, --help           display help for command
 ```
 
-`--start` is intentionally omitted here because it is an internal flag used by the generated shim command.
+`--start` is omitted from the help because the generated command passes it. It means
+"launch unless a management flag was given", so `my-app --plan` previews and `my-app`
+launches. `spinup --start <alias>` never registers anything.
 
 ## Build
 
@@ -511,6 +549,7 @@ which are being overridden by your shell. Values stay masked.
 Generated projects use a `.spinup.yml` file like this:
 
 ```yaml
+version: 1
 name: my-app
 root: .
 default: dev
@@ -522,3 +561,15 @@ actions:
         cwd: .
         cmd: npm run dev
 ```
+
+Validation is strict: an unknown key, a blank command, an environment variable name
+the shell cannot export, a dependency cycle or a `simple` action with no tasks is
+rejected with the path of the offending field. `version` is optional and means `1`
+when absent; a file with a newer version than this build understands is refused
+with an upgrade message.
+
+Every `cwd` resolves against `root`, which resolves against the project directory.
+`dependsOn` is start order, not readiness: a dependent starts after its dependency
+has been started (and after that dependency's `delay`, if any), not after it is
+ready. A task's `env:` block wins over the invoking shell, which wins over the
+selected environment files.

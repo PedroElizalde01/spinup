@@ -9,6 +9,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--action <name>` selects a generated action for launching, `--plan`, `--graph`,
+  `--env`, `--check` and `--doctor`. Inspection uses exactly the action a launch
+  would; an unknown name fails before anything happens and lists the alternatives.
+  A non-default action launches in its own tmux session, `<alias>-<action>`.
+- `--json` on `--list`, `--plan`, `--graph`, `--env`, `--check` and `--doctor`
+  prints one JSON document on stdout and nothing else. Environment values are
+  never included.
+- `--dry-run` with a launch resolves the action, start order, directories and
+  environment origins and starts nothing.
+- `--no-color`, alongside `NO_COLOR`.
+- `--plan` prints start order, resolved directories, dependencies and delays.
+  `--graph` prints each service with the services it actually depends on;
+  independent services no longer appear chained together.
+- `--list` shows each project's default action, mode and whether its config is
+  present and valid.
+- Configs carry an optional `version: 1`. A newer version is refused with an
+  upgrade message.
+
 - `spinup` with no arguments and `spinup --help` print the wordmark, version and a
   one-line tagline before the usage text. Nothing is printed when stdout is not a
   terminal.
@@ -21,7 +39,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The CLI exits with the failed task's own status, 130 after a handled Ctrl+C and
-  143 after a handled SIGTERM. Every failure used to exit 1.
+  143 after a handled SIGTERM. Every failure used to exit 1. `--check` and
+  `--doctor` exit 2 when the selected action cannot run.
+- Validation is strict. Unknown keys, blank commands, unexportable environment
+  variable names, dependency cycles and empty `simple` actions are rejected at
+  load, with the real window and pane path of the offending field.
+- The generated command's `--start` means "launch unless a management flag was
+  given", so `my-app --doctor` inspects through the wrapper. An explicit
+  `spinup --start <alias>` for an unregistered alias fails instead of registering
+  the current directory.
+- Both backends receive one effective environment, decided once: the invoking
+  shell, then the selected files where the shell did not set a key. A tmux pane no
+  longer inherits stale keys from a server started long ago.
 - Regeneration describes itself as a replacement, lists changed environment keys
   without their values, reports reordering and window changes, and refuses to
   proceed without a terminal to confirm in. An unregistered project with an
@@ -76,6 +105,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original mode is preserved, intermediate files are private, and a symlinked
   config has its target replaced rather than the link becoming a regular file.
 - `spinup --help | head` no longer prints an EPIPE stack trace.
+- Output forwarding in `simple` mode honors backpressure: a slow consumer stalls
+  the task instead of the parent queueing its whole output in memory.
+- A detached tmux session was created at 80x24, where a few splits already failed
+  with "no space for new pane". It now takes the terminal's size or a generous
+  default and is resized on attach.
+- A wrapper for a new alias was briefly visible empty between creation and write.
+  It is now staged privately and published atomically; a lost creation race
+  accepts the winner's wrapper instead of failing.
 
 - Environment precedence is defined and documented. A value set in the invoking
   shell now wins over an environment file, and a task's own `env:` block wins over
