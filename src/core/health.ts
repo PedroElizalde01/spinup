@@ -3,7 +3,6 @@ import path from "node:path";
 
 import { execa } from "execa";
 
-import type { ProjectDetection } from "./detectors/types.ts";
 import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
 
 export type ToolCheck = {
@@ -34,7 +33,48 @@ const TOOL_COMMANDS: Record<string, ToolDefinition> = {
   pnpm: { commands: ["pnpm"], args: ["-v"] },
   yarn: { commands: ["yarn"], args: ["-v"] },
   bun: { commands: ["bun"], args: ["-v"] },
+  uv: { commands: ["uv"], args: ["--version"] },
+  poetry: { commands: ["poetry"], args: ["--version"] },
+  just: { commands: ["just"], args: ["--version"] },
+  make: { commands: ["make"], args: ["--version"] },
+  task: { commands: ["task"], args: ["--version"] },
+  mise: { commands: ["mise"], args: ["--version"] },
 };
+
+/**
+ * What the first word of a command needs installed. Only that word is read: a
+ * shell program cannot be analyzed in general, and scanning for "python"
+ * anywhere demanded a system Python for `uv run uvicorn`, which uv provides.
+ */
+const COMMAND_TOOLS: Record<string, string[]> = {
+  npm: ["npm", "node"],
+  npx: ["npm", "node"],
+  pnpm: ["pnpm", "node"],
+  yarn: ["yarn", "node"],
+  node: ["node"],
+  // Bun is its own runtime; it does not need Node.
+  bun: ["bun"],
+  bunx: ["bun"],
+  python: ["python"],
+  python3: ["python"],
+  uvicorn: ["python"],
+  flask: ["python"],
+  gunicorn: ["python"],
+  uv: ["uv"],
+  poetry: ["poetry"],
+  docker: ["docker"],
+  just: ["just"],
+  make: ["make"],
+  task: ["task"],
+  mise: ["mise"],
+};
+
+/** Leading `VAR=value` assignments are part of the shell line, not the program. */
+function programOf(command: string): string {
+  const words = command.trim().split(/\s+/);
+  const program = words.find((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) ?? "";
+  return program;
+}
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
@@ -64,10 +104,6 @@ function getActionTaskPaths(config: SpinupConfig, actionName?: string): Array<{ 
     name: entry.name,
     cwd: entry.cwd,
   }));
-}
-
-function commandUses(command: string, prefix: string): boolean {
-  return command === prefix || command.startsWith(`${prefix} `);
 }
 
 export async function checkTool(name: string): Promise<ToolCheck> {
@@ -144,19 +180,13 @@ export async function checkTools(names: string[]): Promise<ToolCheck[]> {
 }
 
 /**
- * Tools required by the action that will actually run. Considering every action in
- * the file demanded tmux for a project whose selected action is `simple`.
+ * Tools required by the commands of the action that will actually run. Neither
+ * other actions nor the detected stack count: a Bun command does not need Node,
+ * and a project's Python service does not matter to its `docker` action.
  */
-export function inferRequiredTools(
-  config: SpinupConfig,
-  detection: ProjectDetection,
-  actionName?: string,
-): string[] {
+export function inferRequiredTools(config: SpinupConfig, actionName?: string): string[] {
   const tools = new Set<string>();
-  const entries = getConfigEntries(config, actionName);
-  const actions = actionName
-    ? [config.actions[actionName]].filter(Boolean)
-    : Object.values(config.actions);
+  const actions = actionName ? [config.actions[actionName]].filter(Boolean) : Object.values(config.actions);
 
   for (const action of actions) {
     if (action?.mode === "tmux") {
@@ -164,36 +194,9 @@ export function inferRequiredTools(
     }
   }
 
-  if (
-    detection.services.some((service) => service.runtime === "node") ||
-    entries.some((entry) => /(^|\s)(npm|pnpm|yarn|bun|node)\b/.test(entry.cmd))
-  ) {
-    tools.add("node");
-  }
-
-  if (
-    detection.services.some((service) => service.runtime === "python") ||
-    entries.some((entry) => /(^|\s)(python|uvicorn|flask)\b/.test(entry.cmd))
-  ) {
-    tools.add("python");
-  }
-
-  if (
-    detection.services.some((service) => service.runtime === "docker") ||
-    entries.some((entry) => commandUses(entry.cmd, "docker"))
-  ) {
-    tools.add("docker");
-  }
-
-  if (detection.packageManager && detection.packageManager !== "unknown") {
-    tools.add(detection.packageManager);
-  } else {
-    for (const entry of entries) {
-      for (const manager of ["pnpm", "npm", "yarn", "bun"] as const) {
-        if (commandUses(entry.cmd, manager)) {
-          tools.add(manager);
-        }
-      }
+  for (const entry of getConfigEntries(config, actionName)) {
+    for (const tool of COMMAND_TOOLS[programOf(entry.cmd)] ?? []) {
+      tools.add(tool);
     }
   }
 
@@ -230,13 +233,8 @@ export async function validateConfigPaths(
   return warnings;
 }
 
-export function collectToolWarnings(detection: ProjectDetection, tools: ToolCheck[]): string[] {
+export function collectToolWarnings(tools: ToolCheck[]): string[] {
   const warnings: string[] = [];
-  const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
-
-  if (detection.services.some((service) => service.runtime === "docker") && toolMap.get("docker")?.installed === false) {
-    warnings.push("Docker not installed but docker-compose detected.");
-  }
 
   if (tools.some((tool) => !tool.installed)) {
     for (const tool of tools.filter((entry) => !entry.installed)) {

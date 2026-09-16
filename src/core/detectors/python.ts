@@ -1,68 +1,91 @@
-import type { ScanResult } from "../scanner.ts";
+import path from "node:path";
 
-import type { PythonDetectionResult } from "./types.ts";
+import type { DirectoryScan, PythonProject } from "../scanner.ts";
+import type { DetectedService } from "./types.ts";
 
-function collectPythonManifest(scanResult: ScanResult): string {
-  return [scanResult.requirementsTxt, scanResult.pyprojectToml, scanResult.poetryLock]
-    .filter((content): content is string => Boolean(content))
-    .join("\n")
-    .toLowerCase();
+/** Runs a Python tool the way the project does: through uv, poetry, a local venv, or the system. */
+function tool(python: PythonProject, name: string): string {
+  switch (python.runner) {
+    case "uv":
+      return `uv run ${name}`;
+    case "poetry":
+      return `poetry run ${name}`;
+    case "venv":
+      return `${python.venvDir}/bin/${name}`;
+    default:
+      // Many systems ship no bare "python"; python3 is what actually exists.
+      return name === "python" ? "python3" : name;
+  }
 }
 
-export function detectPythonProject(scanResult: ScanResult): PythonDetectionResult | null {
-  if (!scanResult.hasRequirementsTxt && !scanResult.hasPyprojectToml && !scanResult.hasPoetryLock && !scanResult.hasManagePy) {
-    return null;
+function relative(directory: string, file: string): string {
+  return directory === "." ? file : path.posix.join(directory, file);
+}
+
+export function detectPythonFrameworks(python: PythonProject | undefined): string[] {
+  if (!python) {
+    return [];
   }
 
-  const manifest = collectPythonManifest(scanResult);
+  const frameworks = new Set<string>();
 
-  if (scanResult.hasManagePy || manifest.includes("django")) {
+  if (python.hasManagePy || python.manifest.includes("django")) frameworks.add("Django");
+  if (python.manifest.includes("fastapi") || python.entries.some((entry) => entry.framework === "FastAPI")) frameworks.add("FastAPI");
+  if (python.manifest.includes("flask") || python.entries.some((entry) => entry.framework === "Flask")) frameworks.add("Flask");
+
+  return [...frameworks];
+}
+
+export function detectPythonService(
+  name: string,
+  directory: DirectoryScan,
+  notes: string[],
+): DetectedService | undefined {
+  const python = directory.python;
+
+  if (!python) {
+    return undefined;
+  }
+
+  const base = { name, path: directory.path, runtime: "python" as const };
+
+  if (python.hasManagePy) {
     return {
-      kind: "python",
-      frameworks: ["Django"],
-      services: [
-        {
-          name: "app",
-          path: ".",
-          command: "python manage.py runserver",
-          runtime: "python",
-          framework: "Django",
-        },
-      ],
+      ...base,
+      command: `${tool(python, "python")} manage.py runserver`,
+      origin: `${relative(directory.path, "manage.py")} exists`,
+      framework: "Django",
     };
   }
 
-  if (manifest.includes("fastapi")) {
+  const entry = python.entries[0];
+
+  if (entry?.framework === "FastAPI") {
+    const appDir = entry.appDir ? ` --app-dir ${entry.appDir}` : "";
     return {
-      kind: "python",
-      frameworks: ["FastAPI"],
-      services: [
-        {
-          name: "app",
-          path: ".",
-          command: "uvicorn main:app --reload",
-          runtime: "python",
-          framework: "FastAPI",
-        },
-      ],
+      ...base,
+      command: `${tool(python, "uvicorn")} ${entry.module}:${entry.variable} --reload${appDir}`,
+      origin: `${entry.variable} = FastAPI() in ${relative(directory.path, entry.file)}`,
+      framework: "FastAPI",
     };
   }
 
-  if (manifest.includes("flask")) {
+  if (entry?.framework === "Flask") {
+    const target = entry.appDir ? `${entry.appDir}/${entry.module.split(".").join("/")}.py` : `${entry.module}:${entry.variable}`;
     return {
-      kind: "python",
-      frameworks: ["Flask"],
-      services: [
-        {
-          name: "app",
-          path: ".",
-          command: "flask run",
-          runtime: "python",
-          framework: "Flask",
-        },
-      ],
+      ...base,
+      command: `${tool(python, "flask")} --app ${target} run --debug`,
+      origin: `${entry.variable} = Flask() in ${relative(directory.path, entry.file)}`,
+      framework: "Flask",
     };
   }
 
-  return null;
+  // A framework in the dependencies is not an entrypoint. Say so instead of guessing.
+  for (const framework of detectPythonFrameworks(python)) {
+    notes.push(
+      `${directory.path === "." ? "The project" : directory.path} depends on ${framework} but no app entrypoint was found; add its command to the config.`,
+    );
+  }
+
+  return undefined;
 }

@@ -133,6 +133,17 @@ async function promptServiceSelection(services: EditableService[], message: stri
   });
 }
 
+/** Asks for a nonblank command; an empty answer cancels. */
+export async function promptForCommand(message: string): Promise<string> {
+  const answer = (await input({ message })).trim();
+
+  if (!answer) {
+    throw new Error("No command entered; nothing was registered.");
+  }
+
+  return answer;
+}
+
 export async function confirmAction(message: string, defaultValue = false): Promise<boolean> {
   return confirm({
     message,

@@ -180,9 +180,36 @@ export function parseConfig(raw: string): SpinupConfig {
   return configSchema.parse(parsed) as SpinupConfig;
 }
 
-export function stringifyConfig(config: SpinupConfig): string {
+export function stringifyConfig(config: SpinupConfig, comments: Record<string, string> = {}): string {
   const parsed = configSchema.parse(config) as SpinupConfig;
-  return YAML.stringify(parsed);
+
+  if (Object.keys(comments).length === 0) {
+    return YAML.stringify(parsed);
+  }
+
+  // Comments go above each service of the default action, keyed by service name.
+  const doc = new YAML.Document(parsed);
+  const action = parsed.actions[parsed.default]!;
+  const paths: Array<Array<string | number>> =
+    action.mode === "tmux"
+      ? action.windows.flatMap((window, windowIndex) =>
+          window.panes.map((_, paneIndex) => ["actions", parsed.default, "windows", windowIndex, "panes", paneIndex]),
+        )
+      : (action.tasks ?? []).map((_, index) => ["actions", parsed.default, "tasks", index]);
+
+  for (const at of paths) {
+    const node = doc.getIn(at, true);
+
+    if (isMap(node)) {
+      const comment = comments[String((node as YAMLMap).get("name"))];
+
+      if (comment) {
+        (node as YAMLMap).commentBefore = ` ${comment}`;
+      }
+    }
+  }
+
+  return doc.toString();
 }
 
 type Runnable = Task | Pane;
@@ -385,9 +412,9 @@ async function writePrivate(target: string, contents: string): Promise<void> {
  * gave it the umask default, so saving an existing 0600 config that carries task
  * secrets silently republished it as 0644.
  */
-export async function saveConfig(projectRoot: string, config: SpinupConfig): Promise<void> {
+export async function saveConfig(projectRoot: string, config: SpinupConfig, comments: Record<string, string> = {}): Promise<void> {
   // Serialize first, so a validation failure cannot touch the existing file.
-  await writeConfigText(projectRoot, stringifyConfig(config));
+  await writeConfigText(projectRoot, stringifyConfig(config, comments));
 }
 
 /** Saves a structured edit onto the existing file, keeping its comments. */

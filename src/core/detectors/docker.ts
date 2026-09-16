@@ -1,26 +1,33 @@
-import { detectDockerServices } from "../docker.ts";
 import type { ScanResult } from "../scanner.ts";
+import type { DetectedService } from "./types.ts";
 
-import type { DockerDetectionResult } from "./types.ts";
+/**
+ * One `docker compose up` for the whole container application. A process per
+ * container started overlapping dependency sets and could enable services that
+ * are behind a profile; Compose already owns ordering and lifecycle.
+ */
+export function detectComposeService(scan: ScanResult, notes: string[]): DetectedService | undefined {
+  const compose = scan.compose;
 
-export function detectDockerProject(scanResult: ScanResult): DockerDetectionResult | null {
-  const services = detectDockerServices(scanResult);
+  if (!compose || compose.services.length === 0) {
+    return undefined;
+  }
 
-  if (services.length === 0) {
-    return null;
+  if (compose.resolution === "static") {
+    notes.push(
+      `Compose was read without the docker CLI; include, extends and variable interpolation in ${compose.files.join(", ")} were not resolved.`,
+    );
   }
 
   return {
-    kind: "docker",
-    frameworks: ["Docker Compose"],
-    services: services.map((service) => ({
-      name: service.name,
-      path: ".",
-      command: `docker compose up ${service.name}`,
-      runtime: "docker",
-      framework: "Docker Compose",
-      dependsOn: service.dependsOn,
-      delay: 3000,
-    })),
+    name: "compose",
+    path: ".",
+    command: "docker compose up",
+    runtime: "docker",
+    origin: compose.files.join(" + "),
+    framework: "Docker Compose",
+    containers: compose.services.map((service) => service.name),
+    // Attached `up` has no readiness signal of its own; add `ready:` in the config for one.
+    delay: 3000,
   };
 }

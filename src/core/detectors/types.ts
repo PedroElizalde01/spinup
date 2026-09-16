@@ -1,35 +1,21 @@
 import type { PackageManager } from "../scanner.ts";
 
-export type RuntimeKind = "node" | "python" | "docker";
-export type StackKind = RuntimeKind;
+/** "launcher" is a command the project defines itself: bin/dev, make dev, a Procfile.dev entry. */
+export type RuntimeKind = "node" | "python" | "docker" | "launcher";
 
 export type DetectedService = {
   name: string;
   path: string;
   command: string;
   runtime: RuntimeKind;
+  /** Why this command was chosen, e.g. "apps/api/package.json scripts.dev". */
+  origin: string;
   framework?: string;
   dependsOn?: string[];
   delay?: number;
   env?: Record<string, string>;
-};
-
-export type BaseDetectorResult = {
-  frameworks: string[];
-  services: DetectedService[];
-};
-
-export type NodeDetectionResult = BaseDetectorResult & {
-  kind: "node";
-  packageManager: PackageManager;
-};
-
-export type PythonDetectionResult = BaseDetectorResult & {
-  kind: "python";
-};
-
-export type DockerDetectionResult = BaseDetectorResult & {
-  kind: "docker";
+  /** Compose services behind a single `docker compose up`. */
+  containers?: string[];
 };
 
 export type ProjectDetection = {
@@ -39,10 +25,10 @@ export type ProjectDetection = {
   services: DetectedService[];
   prisma: boolean;
   monorepo: boolean;
-  defaultAction: "dev" | "docker";
   prismaCommands?: {
     generate: string;
     migrate: string;
   };
-  fallbackUsed: boolean;
+  /** Things the user should know about the choices made: conflicts, alternatives, guesses not taken. */
+  notes: string[];
 };

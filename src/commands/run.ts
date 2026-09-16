@@ -16,8 +16,9 @@ import { buildDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
 import { executeAction } from "../core/executor.ts";
-import { generateConfig } from "../core/generator.ts";
-import { confirmAction } from "../core/interactive.ts";
+import type { ProjectDetection } from "../core/detectors/types.ts";
+import { generateConfig, generatedComments } from "../core/generator.ts";
+import { confirmAction, promptForCommand } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
@@ -92,25 +93,69 @@ function logDetection(detection: ReturnType<typeof detectProject>): void {
   }
 
   logList("Frameworks", detection.frameworks);
+  // Each command says where it came from, so a wrong guess is easy to trace.
+  logList(
+    "Services",
+    detection.services.map((service) => `${service.name}: ${service.command}  (${service.origin})`),
+  );
 
-  const serviceNames = [
-    ...detection.services.map((service) => service.name),
-  ];
-  logList("Services", serviceNames);
+  for (const note of detection.notes) {
+    console.log(`[detect] note: ${note}`);
+  }
+}
+
+type Generated = {
+  detection: ProjectDetection;
+  config: SpinupConfig;
+  comments: Record<string, string>;
+};
+
+/**
+ * Scans and builds a config. When nothing runnable is found, a terminal user is
+ * asked for the command; otherwise it fails. A guessed "npm start" used to be
+ * written and registered as though it had been detected.
+ */
+async function detectAndGenerate(alias: string, projectRoot: string, allowPrompt: boolean): Promise<Generated> {
+  const scanResult = await scanProject(projectRoot);
+  const detection = detectProject(scanResult);
+
+  if (detection.services.length === 0) {
+    if (!allowPrompt || !process.stdin.isTTY) {
+      throw new Error(
+        `No development command was detected in ${projectRoot}.\n` +
+          `Create ${CONFIG_FILENAME} there with the command to run, or run "spinup ${alias}" in a terminal to enter it.` +
+          (detection.notes.length > 0 ? `\n\n${detection.notes.join("\n")}` : ""),
+      );
+    }
+
+    for (const note of detection.notes) {
+      console.log(`[detect] note: ${note}`);
+    }
+
+    const command = await promptForCommand("No development command was detected. Command to start this project:");
+    detection.services.push({ name: "app", path: ".", command, runtime: "launcher", origin: "entered at registration" });
+  }
+
+  return {
+    detection,
+    config: generateConfig(scanResult, alias, detection),
+    comments: generatedComments(detection),
+  };
 }
 
 async function scanAndGenerate(alias: string, projectRoot: string, options: ScanAndGenerateOptions = {}): Promise<void> {
-  const scanResult = await scanProject(projectRoot);
-  const detection = detectProject(scanResult);
-  const config = generateConfig(scanResult, alias);
-
   if (!options.quiet) {
     console.log("[scan] scanning project\n");
-    logDetection(detection);
-    console.log(`\n[config] generating optimized ${CONFIG_FILENAME}`);
   }
 
-  await saveConfig(projectRoot, config);
+  const { detection, config, comments } = await detectAndGenerate(alias, projectRoot, true);
+
+  if (!options.quiet) {
+    logDetection(detection);
+    console.log(`\n[config] generating ${CONFIG_FILENAME}`);
+  }
+
+  await saveConfig(projectRoot, config, comments);
 
   if (!options.quiet) {
     console.log(`[config] generated ${CONFIG_FILENAME}\n`);
@@ -266,14 +311,13 @@ export function formatProposedChanges(current: SpinupConfig, next: SpinupConfig)
  * and keeps the previous bytes in a private backup before writing.
  */
 async function regenerateWithPreview(alias: string, projectRoot: string): Promise<void> {
-  const scanResult = await scanProject(projectRoot);
-  const detection = detectProject(scanResult);
-  const nextConfig = generateConfig(scanResult, alias);
+  // Never prompt here: replacing a working config with a typed-in guess is not a regeneration.
+  const { detection, config: nextConfig, comments } = await detectAndGenerate(alias, projectRoot, false);
   const configPath = getConfigPath(projectRoot);
   const currentYaml = await readFile(configPath, "utf8");
   const currentConfig = await loadConfig(projectRoot);
   const diffLines = formatProposedChanges(currentConfig, nextConfig);
-  const identical = stringifyConfig(nextConfig) === currentYaml;
+  const identical = stringifyConfig(nextConfig, comments) === currentYaml;
 
   console.log("[scan] scanning project\n");
   logDetection(detection);
@@ -309,7 +353,7 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   }
 
   const backupPath = await backupConfig(projectRoot);
-  await saveConfig(projectRoot, nextConfig);
+  await saveConfig(projectRoot, nextConfig, comments);
   console.log(`[config] updated ${CONFIG_FILENAME} (previous copy in ${path.basename(backupPath)})\n`);
 }
 

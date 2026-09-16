@@ -172,7 +172,7 @@ export async function doctorProject(alias: string, options: InspectOptions = {})
   const { actionName, action } = selectAction(config, options.action);
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
-  const requiredTools = inferRequiredTools(config, detection, actionName);
+  const requiredTools = inferRequiredTools(config, actionName);
   const tools = await checkTools([...new Set(["tmux", "docker", ...requiredTools])]);
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   const missingRequired = requiredTools.filter((name) => toolMap.get(name)?.installed !== true);
@@ -181,7 +181,6 @@ export async function doctorProject(alias: string, options: InspectOptions = {})
     ...missingRequired.map((name) => `${name} is required by action "${actionName}" but is not installed.`),
   ];
   const services = actionEntries(action).map((item) => item.name);
-  const usesDocker = detection.services.some((service) => service.runtime === "docker");
 
   const report = {
     alias,
@@ -197,6 +196,14 @@ export async function doctorProject(alias: string, options: InspectOptions = {})
     packageManager: detection.packageManager ?? null,
     frameworks: detection.frameworks,
     requiredTools,
+    // A fresh scan, for comparison with what the config says: origin of each command and anything notable.
+    detected: detection.services.map((service) => ({
+      name: service.name,
+      command: service.command,
+      origin: service.origin,
+      containers: service.containers ?? [],
+    })),
+    notes: detection.notes,
     tools: tools.map((tool) => ({
       name: tool.name,
       required: requiredTools.includes(tool.name),
@@ -225,8 +232,17 @@ export async function doctorProject(alias: string, options: InspectOptions = {})
 
     console.log("Stack detection:");
     console.log(`  ${detection.stack} ${formatCheck(detection.stack !== "unknown")}`);
-    console.log(`  prisma ${formatCheck(detection.prisma)}`);
-    console.log(`  docker ${formatCheck(usesDocker)}\n`);
+    console.log(`  frameworks ${detection.frameworks.length > 0 ? detection.frameworks.join(", ") : "(none)"}\n`);
+
+    console.log("A fresh scan would generate:");
+    printList(report.detected.map((service) => `${service.name}: ${service.command}  (${service.origin})`));
+
+    if (report.notes.length > 0) {
+      console.log("\nNotes:");
+      printList(report.notes);
+    }
+
+    console.log("");
 
     console.log("Services in this action:");
     printList(services);

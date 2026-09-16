@@ -1,6 +1,4 @@
-import { detectProject } from "../core/detector.ts";
 import { checkDocker, checkTools, collectToolWarnings, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
-import { scanProject } from "../core/scanner.ts";
 import { emit, EXIT } from "../ui/output.ts";
 import { loadRegisteredProject, selectAction } from "./shared.ts";
 
@@ -11,11 +9,10 @@ type CheckOptions = {
 export async function checkProject(alias: string, options: CheckOptions = {}): Promise<void> {
   const { projectRoot, config } = await loadRegisteredProject(alias);
   const { actionName } = selectAction(config, options.action);
-  const scanResult = await scanProject(projectRoot);
-  const detection = detectProject(scanResult);
-  const tools = await checkTools(inferRequiredTools(config, detection, actionName));
+  // Requirements come from the selected commands alone; no scan is needed.
+  const tools = await checkTools(inferRequiredTools(config, actionName));
   const pathProblems = await validateConfigPaths(projectRoot, config, actionName);
-  const toolProblems = collectToolWarnings(detection, tools);
+  const toolProblems = collectToolWarnings(tools);
   const docker = tools.some((tool) => tool.name === "docker") ? await checkDocker() : undefined;
 
   if (docker?.cli && !docker.compose) {

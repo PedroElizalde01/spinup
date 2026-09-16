@@ -1,6 +1,7 @@
-import type { PackageJsonData, PackageManager, ScanResult, ServiceCandidate } from "../scanner.ts";
+import path from "node:path";
 
-import type { DetectedService, NodeDetectionResult } from "./types.ts";
+import type { DirectoryScan, PackageJsonData, PackageManager, ScanResult } from "../scanner.ts";
+import type { DetectedService } from "./types.ts";
 
 const FRAMEWORK_DEPENDENCIES: Array<[string, string]> = [
   ["@nestjs/core", "NestJS"],
@@ -11,16 +12,15 @@ const FRAMEWORK_DEPENDENCIES: Array<[string, string]> = [
   ["fastify", "Fastify"],
 ];
 
+// Long-running development entrypoints only. "check" and "test" were on this list,
+// so a package whose only script ran its tests was registered as a dev server.
+const DEV_SCRIPTS = ["dev", "start:dev", "develop", "serve", "start"] as const;
+
 function hasDependency(packageJson: PackageJsonData | undefined, dependencyName: string): boolean {
-  return Boolean(
-    packageJson?.dependencies?.[dependencyName] || packageJson?.devDependencies?.[dependencyName],
-  );
+  return Boolean(packageJson?.dependencies?.[dependencyName] || packageJson?.devDependencies?.[dependencyName]);
 }
 
-export function buildScriptCommand(
-  packageManager: PackageManager | undefined,
-  scriptName: string,
-): string {
+export function buildScriptCommand(packageManager: PackageManager | undefined, scriptName: string): string {
   switch (packageManager) {
     case "pnpm":
       return `pnpm ${scriptName}`;
@@ -35,10 +35,7 @@ export function buildScriptCommand(
   }
 }
 
-export function buildExecCommand(
-  packageManager: PackageManager | undefined,
-  command: string,
-): string {
+export function buildExecCommand(packageManager: PackageManager | undefined, command: string): string {
   switch (packageManager) {
     case "pnpm":
       return `pnpm exec ${command}`;
@@ -53,170 +50,107 @@ export function buildExecCommand(
   }
 }
 
-function detectFrameworks(packageJson: PackageJsonData | undefined): string[] {
-  return FRAMEWORK_DEPENDENCIES.filter(([dependencyName]) => hasDependency(packageJson, dependencyName))
-    .map(([, frameworkName]) => frameworkName);
+export function detectNodeFrameworks(packageJson: PackageJsonData | undefined): string[] {
+  return FRAMEWORK_DEPENDENCIES.filter(([dependency]) => hasDependency(packageJson, dependency)).map(([, label]) => label);
 }
 
-function resolveFrameworkLabel(frameworks: string[]): string | undefined {
-  const preferredOrder = ["NestJS", "Next.js", "Vite", "Express", "Fastify", "React"];
-
-  return preferredOrder.find((framework) => frameworks.includes(framework));
-}
-
-function resolveNodeFallback(scanResult: ScanResult): string | undefined {
-  if (scanResult.hasServerJs) {
-    return "node server.js";
-  }
-
-  if (scanResult.hasIndexJs) {
-    return "node index.js";
-  }
-
-  return undefined;
+function frameworkLabel(frameworks: string[]): string | undefined {
+  return ["NestJS", "Next.js", "Vite", "Express", "Fastify", "React"].find((framework) => frameworks.includes(framework));
 }
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
 
-function getBinEntryPaths(packageJson: PackageJsonData | undefined): string[] {
+function binEntryPaths(packageJson: PackageJsonData | undefined): string[] {
   if (!packageJson?.bin) {
     return [];
   }
 
-  if (typeof packageJson.bin === "string") {
-    return [packageJson.bin];
-  }
-
-  return Object.values(packageJson.bin);
+  return typeof packageJson.bin === "string" ? [packageJson.bin] : Object.values(packageJson.bin);
 }
 
-function isSelfReferentialCliScript(
-  packageJson: PackageJsonData | undefined,
-  scriptCommand: string | undefined,
-): boolean {
-  if (!scriptCommand) {
-    return false;
-  }
+/** A CLI package whose "start" just runs its own bin is not a dev server. */
+function isSelfReferentialCliScript(packageJson: PackageJsonData | undefined, scriptCommand: string): boolean {
+  const normalized = normalizeCommand(scriptCommand);
 
-  const normalizedCommand = normalizeCommand(scriptCommand);
+  return binEntryPaths(packageJson).some((binPath) =>
+    [binPath, `./${binPath}`].some((variant) =>
+      [`bun run ${variant}`, `bun ${variant}`, `node ${variant}`, `tsx ${variant}`, `ts-node ${variant}`].includes(normalized),
+    ),
+  );
+}
 
-  return getBinEntryPaths(packageJson).some((binPath) => {
-    const variants = [binPath, `./${binPath}`];
-
-    return variants.some((variant) => {
-      const normalizedVariant = normalizeCommand(variant);
-      return [
-        `bun run ${normalizedVariant}`,
-        `bun ${normalizedVariant}`,
-        `node ${normalizedVariant}`,
-        `tsx ${normalizedVariant}`,
-        `ts-node ${normalizedVariant}`,
-      ].includes(normalizedCommand);
-    });
-  });
+function manifestPath(directory: string): string {
+  return directory === "." ? "package.json" : path.posix.join(directory, "package.json");
 }
 
 function resolveCommand(
-  packageJson: PackageJsonData | undefined,
+  directory: DirectoryScan,
   packageManager: PackageManager,
-  rootFallback?: string,
-): string | undefined {
-  const scripts = packageJson?.scripts ?? {};
-  const frameworks = detectFrameworks(packageJson);
+  scripts: readonly string[] = DEV_SCRIPTS,
+): { command: string; origin: string } | undefined {
+  const declared = directory.packageJson?.scripts ?? {};
 
-  if (frameworks.includes("NestJS") && scripts["start:dev"]) {
-    return buildScriptCommand(packageManager, "start:dev");
-  }
+  for (const script of scripts) {
+    const body = declared[script];
 
-  for (const scriptName of ["dev", "start", "serve", "check", "test"] as const) {
-    if (!scripts[scriptName]) {
+    if (!body || isSelfReferentialCliScript(directory.packageJson, body)) {
       continue;
     }
 
-    if (isSelfReferentialCliScript(packageJson, scripts[scriptName])) {
-      continue;
-    }
-
-    return buildScriptCommand(packageManager, scriptName);
+    return { command: buildScriptCommand(packageManager, script), origin: `${manifestPath(directory.path)} scripts.${script}` };
   }
 
-  return rootFallback;
+  // An entry file that exists is evidence; a guessed "npm start" was not. index.js
+  // alone is usually a library's export surface, so it counts only for a package
+  // that depends on an HTTP server framework.
+  const isServer = hasDependency(directory.packageJson, "express") || hasDependency(directory.packageJson, "fastify");
+  const entry = directory.hasServerJs ? "server.js" : directory.hasIndexJs && isServer ? "index.js" : undefined;
+
+  if (entry) {
+    return { command: `node ${entry}`, origin: `${directory.path === "." ? entry : path.posix.join(directory.path, entry)} exists` };
+  }
+
+  return undefined;
 }
 
-function resolveService(candidate: ServiceCandidate, packageManager: PackageManager): DetectedService | undefined {
-  if (!candidate.packageJson) {
-    return undefined;
-  }
-
-  const command = resolveCommand(candidate.packageJson, packageManager);
-
-  if (!command) {
-    return undefined;
-  }
-
+function toService(name: string, directory: DirectoryScan, resolved: { command: string; origin: string }): DetectedService {
   return {
-    name: candidate.name,
-    path: candidate.path,
-    command,
+    name,
+    path: directory.path,
+    command: resolved.command,
     runtime: "node",
-    framework: resolveFrameworkLabel(detectFrameworks(candidate.packageJson)),
+    origin: resolved.origin,
+    framework: frameworkLabel(detectNodeFrameworks(directory.packageJson)),
   };
 }
 
-export function detectNodeProject(scanResult: ScanResult): NodeDetectionResult | null {
-  if (!scanResult.packageJson && scanResult.serviceCandidates.length === 0) {
-    return null;
-  }
-
-  if (scanResult.monorepo) {
-    const services = scanResult.serviceCandidates
-      .map((candidate) => resolveService(candidate, scanResult.packageManager))
-      .filter((service): service is DetectedService => Boolean(service))
-      .sort((left, right) => left.name.localeCompare(right.name));
-
-    if (services.length === 0) {
-      return null;
+/**
+ * A root `dev` script in a monorepo is the project's own orchestrator (turbo, nx,
+ * concurrently). It used to be dropped in favor of launching every workspace
+ * separately; now it wins, and members are only expanded when there is none.
+ */
+export function detectNodeServices(scan: ScanResult): DetectedService[] {
+  if (!scan.monorepo) {
+    if (!scan.root.packageJson) {
+      return [];
     }
 
-    const frameworks = [
-      ...new Set(
-        services.flatMap((service) => (service.framework ? [service.framework] : [])),
-      ),
-    ];
-
-    return {
-      kind: "node",
-      packageManager: scanResult.packageManager,
-      frameworks,
-      services,
-    };
+    const resolved = resolveCommand(scan.root, scan.packageManager);
+    return resolved ? [toService("app", scan.root, resolved)] : [];
   }
 
-  if (!scanResult.packageJson) {
-    return null;
+  const orchestrator = scan.root.packageJson ? resolveCommand(scan.root, scan.packageManager, ["dev"]) : undefined;
+
+  if (orchestrator) {
+    return [toService("app", scan.root, { ...orchestrator, origin: `${orchestrator.origin} (runs the workspaces)` })];
   }
 
-  const frameworks = detectFrameworks(scanResult.packageJson);
-  const command = resolveCommand(scanResult.packageJson, scanResult.packageManager, resolveNodeFallback(scanResult));
-
-  if (!command) {
-    return null;
-  }
-
-  return {
-    kind: "node",
-    packageManager: scanResult.packageManager,
-    frameworks,
-    services: [
-      {
-        name: "app",
-        path: ".",
-        command,
-        runtime: "node",
-        framework: resolveFrameworkLabel(frameworks),
-      },
-    ],
-  };
+  return scan.candidates
+    .filter((candidate) => candidate.packageJson)
+    .flatMap((candidate) => {
+      const resolved = resolveCommand(candidate, scan.packageManager);
+      return resolved ? [toService(path.posix.basename(candidate.path), candidate, resolved)] : [];
+    });
 }

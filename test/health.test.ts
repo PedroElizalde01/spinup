@@ -3,7 +3,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { checkTool, inferRequiredTools, validateConfigPaths } from "../src/core/health.ts";
-import type { ProjectDetection } from "../src/core/detectors/types.ts";
 import type { SpinupConfig } from "../src/types/config.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
@@ -12,16 +11,6 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => cleanupTempDir(dir)));
 });
-
-const emptyDetection: ProjectDetection = {
-  stack: "node",
-  frameworks: [],
-  services: [],
-  prisma: false,
-  monorepo: false,
-  defaultAction: "dev",
-  fallbackUsed: false,
-};
 
 const mixedConfig: SpinupConfig = {
   name: "health",
@@ -39,12 +28,34 @@ const mixedConfig: SpinupConfig = {
 describe("required tool inference", () => {
   // Scanning every action demanded tmux from a project whose selected action is simple.
   test("considers only the selected action", () => {
-    expect(inferRequiredTools(mixedConfig, emptyDetection, "simple-only")).not.toContain("tmux");
-    expect(inferRequiredTools(mixedConfig, emptyDetection, "workspace")).toContain("tmux");
+    expect(inferRequiredTools(mixedConfig, "simple-only")).not.toContain("tmux");
+    expect(inferRequiredTools(mixedConfig, "workspace")).toContain("tmux");
   });
 
   test("still considers every action when none is named", () => {
-    expect(inferRequiredTools(mixedConfig, emptyDetection)).toContain("tmux");
+    expect(inferRequiredTools(mixedConfig)).toContain("tmux");
+  });
+
+  test.each([
+    ["bun run dev", ["bun"], ["node"]],
+    ["pnpm dev", ["pnpm", "node"], []],
+    ["uv run uvicorn main:app --reload", ["uv"], ["python"]],
+    [".venv/bin/uvicorn main:app", [], ["python"]],
+    ["python3 manage.py runserver", ["python"], []],
+    ["PORT=4000 node server.js", ["node"], []],
+    ["make dev", ["make"], ["node"]],
+    ["docker compose up", ["docker"], []],
+  ])("%p requires %p and not %p", (cmd, required, notRequired) => {
+    const config: SpinupConfig = {
+      name: "t",
+      root: ".",
+      default: "dev",
+      actions: { dev: { mode: "simple", tasks: [{ name: "a", cwd: ".", cmd }] } },
+    };
+    const tools = inferRequiredTools(config, "dev");
+
+    for (const tool of required) expect(tools).toContain(tool);
+    for (const tool of notRequired) expect(tools).not.toContain(tool);
   });
 });
 
