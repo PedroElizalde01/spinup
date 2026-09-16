@@ -52,20 +52,16 @@ export function buildDependencyGraph<T extends Runnable>(items: T[]): T[] {
   return orderedNames.map((name) => itemMap.get(name)!);
 }
 
+/**
+ * One line per service in start order, naming its actual dependencies. The old
+ * rendering drew a single chain through the topological order, so two unrelated
+ * services appeared to depend on each other.
+ */
 export function visualizeDependencyGraph<T extends Runnable>(items: T[]): string {
-  const ordered = buildDependencyGraph(items);
-
-  return ordered
-    .map((item, index) => {
-      if (index === ordered.length - 1) {
-        return item.name;
-      }
-
-      return `${item.name}\n  ↓`;
+  return buildDependencyGraph(items)
+    .map((item) => {
+      const dependencies = unique(item.dependsOn ?? []);
+      return dependencies.length > 0 ? `${item.name} depends on ${dependencies.join(", ")}` : item.name;
     })
     .join("\n");
-}
-
-export function collectDependencies<T extends Runnable>(items: T[]): string[] {
-  return unique(items.flatMap((item) => item.dependsOn ?? []));
 }

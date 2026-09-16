@@ -5,71 +5,118 @@ import path from "node:path";
 import YAML, { isMap, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { z, ZodError } from "zod";
 
+import { buildDependencyGraph } from "./dependencies.ts";
 import type { Action, Pane, SpinupConfig, Task, Window } from "../types/config.ts";
 
-const taskSchema: z.ZodType<Task> = z.object({
-  name: z.string().min(1),
-  cwd: z.string().min(1),
-  cmd: z.string().min(1),
-  dependsOn: z.array(z.string().min(1)).optional(),
-  delay: z.number().int().nonnegative().optional(),
-  env: z.record(z.string(), z.string()).optional(),
-});
+/** The newest config format this build understands. */
+export const CURRENT_CONFIG_VERSION = 1;
 
-const paneSchema: z.ZodType<Pane> = z.object({
-  name: z.string().min(1),
-  cwd: z.string().min(1),
-  cmd: z.string().min(1),
-  dependsOn: z.array(z.string().min(1)).optional(),
-  delay: z.number().int().nonnegative().optional(),
-  env: z.record(z.string(), z.string()).optional(),
-});
+// Validated without rewriting: a command is run exactly as written, so trimming
+// here would make validation and execution disagree.
+const nonblank = z.string().refine((value) => value.trim().length > 0, { message: "must not be blank" });
 
-const windowSchema: z.ZodType<Window> = z.object({
-  name: z.string().min(1),
-  layout: z.string().min(1).optional(),
-  panes: z.array(paneSchema).min(1),
-});
+// What a POSIX shell accepts as a variable name. Anything else cannot be exported
+// and tmux would reject it at pane creation, after the session already exists.
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const envSchema = z.record(
+  z.string().regex(ENV_KEY_PATTERN, "is not a valid environment variable name"),
+  z.string(),
+);
 
-const simpleActionSchema = z.object({
-  mode: z.literal("simple"),
-  tasks: z.array(taskSchema).optional(),
-});
+// Unknown keys are rejected: a misspelled `dependson` used to disappear silently and
+// the service simply started out of order.
+const runnableSchema = z
+  .object({
+    name: nonblank,
+    cwd: nonblank,
+    cmd: nonblank,
+    dependsOn: z.array(nonblank).optional(),
+    delay: z.number().int().nonnegative().optional(),
+    env: envSchema.optional(),
+  })
+  .strict();
 
-const tmuxActionSchema = z.object({
-  mode: z.literal("tmux"),
-  windows: z.array(windowSchema).min(1),
-});
+const taskSchema: z.ZodType<Task> = runnableSchema;
+const paneSchema: z.ZodType<Pane> = runnableSchema;
 
-function addUniqueNameIssues(
-  items: Array<{ name: string; dependsOn?: string[] }>,
-  ctx: z.RefinementCtx,
-  basePath: Array<string | number>,
-): void {
+const windowSchema: z.ZodType<Window> = z
+  .object({
+    name: nonblank,
+    layout: nonblank.optional(),
+    panes: z.array(paneSchema).min(1),
+  })
+  .strict();
+
+const simpleActionSchema = z
+  .object({
+    mode: z.literal("simple"),
+    // An action with nothing to run is a mistake, not an empty success.
+    tasks: z.array(taskSchema).min(1, "must list at least one task"),
+  })
+  .strict();
+
+const tmuxActionSchema = z
+  .object({
+    mode: z.literal("tmux"),
+    windows: z.array(windowSchema).min(1),
+  })
+  .strict();
+
+type Located = { item: { name: string; dependsOn?: string[] }; path: Array<string | number> };
+
+/** Every runnable in an action with the path it really lives at. */
+function locateEntries(actionName: string, action: Action): Located[] {
+  if (action.mode === "simple") {
+    return (action.tasks ?? []).map((item, index) => ({ item, path: ["actions", actionName, "tasks", index] }));
+  }
+
+  // Flattening panes across windows gave the issue a made-up index; a duplicate in
+  // the second window was reported at windows.3 instead of windows.1.panes.0.
+  return action.windows.flatMap((window, windowIndex) =>
+    window.panes.map((item, paneIndex) => ({
+      item,
+      path: ["actions", actionName, "windows", windowIndex, "panes", paneIndex],
+    })),
+  );
+}
+
+function addGraphIssues(actionName: string, action: Action, ctx: z.RefinementCtx): void {
+  const entries = locateEntries(actionName, action);
   const seen = new Set<string>();
 
-  for (const [index, item] of items.entries()) {
+  for (const { item, path } of entries) {
     if (seen.has(item.name)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Duplicate service name "${item.name}"`,
-        path: [...basePath, index, "name"],
-      });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Duplicate service name "${item.name}"`, path: [...path, "name"] });
     }
 
     seen.add(item.name);
   }
 
-  for (const [index, item] of items.entries()) {
+  let unknown = false;
+
+  for (const { item, path } of entries) {
     for (const dependency of item.dependsOn ?? []) {
       if (!seen.has(dependency)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Unknown dependency "${dependency}"`,
-          path: [...basePath, index, "dependsOn"],
-        });
+        unknown = true;
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Unknown dependency "${dependency}"`, path: [...path, "dependsOn"] });
       }
     }
+  }
+
+  if (unknown) {
+    return;
+  }
+
+  // A cycle used to pass parsing and only surface at launch, after the tmux
+  // session or the first tasks were already created.
+  try {
+    buildDependencyGraph(entries.map(({ item }) => ({ ...item, cwd: "", cmd: "" })));
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message.replace("\n", ": ") : String(error),
+      path: ["actions", actionName],
+    });
   }
 }
 
@@ -77,11 +124,20 @@ const actionSchema = z.discriminatedUnion("mode", [simpleActionSchema, tmuxActio
 
 const configSchema = z
   .object({
-    name: z.string().min(1),
-    root: z.string().min(1),
-    default: z.string().min(1),
-    actions: z.record(z.string().min(1), actionSchema),
+    version: z
+      .number()
+      .int()
+      .optional()
+      .refine((value) => value === undefined || value <= CURRENT_CONFIG_VERSION, {
+        message: `is newer than this spinup understands (up to ${CURRENT_CONFIG_VERSION}); upgrade spinup`,
+      })
+      .refine((value) => value === undefined || value >= 1, { message: "must be 1 or greater" }),
+    name: nonblank,
+    root: nonblank,
+    default: nonblank,
+    actions: z.record(nonblank, actionSchema),
   })
+  .strict()
   .superRefine((config, ctx) => {
     if (!config.actions[config.default]) {
       ctx.addIssue({
@@ -92,16 +148,7 @@ const configSchema = z
     }
 
     for (const [actionName, action] of Object.entries(config.actions)) {
-      if (action.mode === "simple") {
-        addUniqueNameIssues(action.tasks ?? [], ctx, ["actions", actionName, "tasks"]);
-        continue;
-      }
-
-      addUniqueNameIssues(
-        action.windows.flatMap((window) => window.panes),
-        ctx,
-        ["actions", actionName, "windows"],
-      );
+      addGraphIssues(actionName, action, ctx);
     }
   });
 

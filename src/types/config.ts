@@ -35,6 +35,8 @@ export type TmuxAction = {
 export type Action = SimpleAction | TmuxAction;
 
 export type SpinupConfig = {
+  /** Config format version. Absent means 1. */
+  version?: number;
   name: string;
   root: string;
   default: string;

@@ -1,3 +1,4 @@
+import { CURRENT_CONFIG_VERSION } from "./config.ts";
 import { detectProject } from "./detector.ts";
 import type { ScanResult } from "./scanner.ts";
 import type { Action, SpinupConfig, Task, Window } from "../types/config.ts";
@@ -91,6 +92,7 @@ export function generateConfig(scanResult: ScanResult, projectName: string): Spi
   }
 
   return {
+    version: CURRENT_CONFIG_VERSION,
     name: projectName,
     root: ".",
     default: detection.defaultAction,
