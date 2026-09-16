@@ -11,7 +11,7 @@ import { generateConfig } from "../core/generator.ts";
 import { confirmAction } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
-import { createShim, getShimPath } from "../core/shim.ts";
+import { createShim, getShimPath, removeShim } from "../core/shim.ts";
 import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
 import { GLYPH } from "../ui/brand.ts";
 
@@ -218,21 +218,37 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   console.log(`[config] updated ${CONFIG_FILENAME}\n`);
 }
 
-async function bootstrapProject(
+/**
+ * Registers an alias for a project directory. Exported for the out-of-process
+ * contention test; the CLI reaches it through runProject.
+ *
+ * The shim comes first: it is the step that can legitimately refuse (a name on
+ * PATH, a file spinup does not own), and refusing before the project config is
+ * written means a rejected alias leaves the project untouched. If anything after
+ * it fails, a wrapper this call created is removed again, so no runnable command
+ * is left behind without a registry entry. A wrapper that already existed is kept.
+ */
+export async function bootstrapProject(
   alias: string,
   projectRoot: string,
   overwriteConfig: boolean,
   options: BootstrapProjectOptions = {},
 ): Promise<void> {
-  if (overwriteConfig) {
-    await scanAndGenerate(alias, projectRoot, { quiet: options.quiet });
-  }
+  const outcome = await createShim(alias);
 
-  // Create the shim first. It is the step that can legitimately refuse -- a name
-  // collision or a file spinup does not own -- and registering beforehand would
-  // leave a successful-looking entry with no runnable command behind it.
-  await createShim(alias);
-  await registerProject(alias, projectRoot);
+  try {
+    if (overwriteConfig) {
+      await scanAndGenerate(alias, projectRoot, { quiet: options.quiet });
+    }
+
+    await registerProject(alias, projectRoot);
+  } catch (error) {
+    if (outcome === "created") {
+      await removeShim(alias).catch(() => undefined);
+    }
+
+    throw error;
+  }
 }
 
 async function ensureProjectReady(alias: string, options: RunProjectOptions): Promise<EnsureProjectReadyResult> {

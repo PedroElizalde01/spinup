@@ -1,4 +1,4 @@
-import { open, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { open, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,7 +16,6 @@ const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 const LOCK_ACQUIRE_TIMEOUT_MS = 5000;
 const LOCK_RETRY_INTERVAL_MS = 25;
-const LOCK_STALE_AFTER_MS = 30_000;
 
 export function normalizeAlias(alias: string): string {
   return alias.trim().toLowerCase();
@@ -98,20 +97,47 @@ async function ensureRegistryDir(): Promise<void> {
   await mkdir(getConfigDir(), { recursive: true });
 }
 
-async function removeStaleLock(lockPath: string): Promise<boolean> {
+function processAlive(pid: number): boolean {
   try {
-    const stats = await stat(lockPath);
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists but belongs to someone else: still alive.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
-    if (Date.now() - stats.mtimeMs < LOCK_STALE_AFTER_MS) {
-      return false;
+/**
+ * The lock file names its holder. Age alone was the previous test, and a slow but
+ * live holder past the threshold had its lock deleted from under it. Now a lock is
+ * removed only when its recorded holder is gone; otherwise the holder is reported.
+ */
+async function recoverLock(lockPath: string): Promise<{ recovered: boolean; holder?: number }> {
+  let holder: number | undefined;
+
+  try {
+    const raw = (await readFile(lockPath, "utf8")).trim();
+    holder = /^\d+$/.test(raw) ? Number(raw) : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      // Released while we waited; retry immediately.
+      return { recovered: true };
     }
 
-    await rm(lockPath, { force: true });
-    return true;
-  } catch {
-    // Lock vanished on its own; the caller can retry immediately.
-    return true;
+    throw error;
   }
+
+  if (holder !== undefined && processAlive(holder)) {
+    return { recovered: false, holder };
+  }
+
+  if (holder === undefined) {
+    // Unreadable holder: not proof of anything, so leave it to the user.
+    return { recovered: false };
+  }
+
+  await rm(lockPath, { force: true });
+  return { recovered: true };
 }
 
 /**
@@ -128,6 +154,7 @@ async function withRegistryLock<T>(operation: () => Promise<T>): Promise<T> {
       const handle = await open(lockPath, "wx");
 
       try {
+        await handle.writeFile(`${process.pid}\n`, "utf8");
         await handle.close();
         return await operation();
       } finally {
@@ -138,11 +165,16 @@ async function withRegistryLock<T>(operation: () => Promise<T>): Promise<T> {
         throw error;
       }
 
-      if (Date.now() > deadline && !(await removeStaleLock(lockPath))) {
-        throw new Error(
-          `Timed out waiting for the spinup registry lock at ${lockPath}.\n` +
-            "Another spinup process may be running. Remove that file if it is stale.",
-        );
+      if (Date.now() > deadline) {
+        const { recovered, holder } = await recoverLock(lockPath);
+
+        if (!recovered) {
+          const who = holder === undefined ? "Its holder could not be read." : `It is held by process ${holder}.`;
+          throw new Error(
+            `Timed out waiting for the spinup registry lock at ${lockPath}.\n` +
+              `${who} Wait for that spinup process to finish, or remove the file if you are sure it is stale.`,
+          );
+        }
       }
 
       await delay(LOCK_RETRY_INTERVAL_MS);

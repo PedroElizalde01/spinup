@@ -136,7 +136,13 @@ async function replaceOwned(target: string, contents: string): Promise<void> {
   }
 }
 
-export async function createShim(alias: string): Promise<void> {
+export type ShimOutcome = "created" | "refreshed" | "unchanged";
+
+/**
+ * Writes or refreshes the wrapper and says which happened, so a caller that fails
+ * later can roll back a file it created without touching one that already existed.
+ */
+export async function createShim(alias: string): Promise<ShimOutcome> {
   const normalizedAlias = validateAlias(alias);
   const shimPath = getShimPath(normalizedAlias);
   await mkdir(getShimDir(), { recursive: true });
@@ -162,7 +168,7 @@ export async function createShim(alias: string): Promise<void> {
         throw error;
       }
 
-      return;
+      return "created";
     }
 
     case "symlink":
@@ -183,11 +189,11 @@ export async function createShim(alias: string): Promise<void> {
       }
 
       if (isCurrentWrapper(destination.contents, normalizedAlias)) {
-        return;
+        return "unchanged";
       }
 
       await replaceOwned(shimPath, buildShimContents(normalizedAlias));
-      return;
+      return "refreshed";
     }
   }
 }

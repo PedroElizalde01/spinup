@@ -316,3 +316,91 @@ describe("historical wrapper formats", () => {
     await expect(createShim("mine")).rejects.toThrow(/not created by spinup/);
   });
 });
+
+describe("registration and removal stay consistent across files", () => {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const REGISTER_FIXTURE = new URL("./fixtures/register.ts", import.meta.url).pathname;
+
+  test.skipIf(isRoot)("a failed registration removes the wrapper it created", async () => {
+    const { configHome, shimDir } = await isolate();
+    const { bootstrapProject } = await import("../src/commands/run.ts");
+    const project = await makeTempDir("spinup-project-");
+    tempDirs.push(project);
+
+    // Make the registry unwritable after its directory exists, so shim creation
+    // succeeds and the registry write is what fails.
+    const configDir = path.join(configHome, "spinup");
+    await mkdir(configDir, { recursive: true });
+    await chmod(configDir, 0o500);
+
+    try {
+      await expect(bootstrapProject("rollback", project, false)).rejects.toThrow();
+      await expect(readFile(path.join(shimDir, "rollback"), "utf8")).rejects.toThrow();
+    } finally {
+      await chmod(configDir, 0o700);
+    }
+  });
+
+  test.skipIf(isRoot)("a failed wrapper removal keeps the registration", async () => {
+    const { shimDir } = await isolate();
+    const { removeRegisteredProject } = await import("../src/commands/remove.ts");
+    const project = await makeTempDir("spinup-project-");
+    tempDirs.push(project);
+
+    await createShim("sticky");
+    await registerProject("sticky", project);
+    await chmod(shimDir, 0o500);
+
+    try {
+      await expect(removeRegisteredProject("sticky")).rejects.toThrow();
+      // Nothing reported success, and the entry is still there to retry against.
+      expect(await getProject("sticky")).toBe(project);
+      expect(await readFile(path.join(shimDir, "sticky"), "utf8")).toContain("sticky");
+    } finally {
+      await chmod(shimDir, 0o700);
+    }
+  });
+
+  test("removal deletes the wrapper before the registry entry", async () => {
+    const { shimDir } = await isolate();
+    const { removeRegisteredProject } = await import("../src/commands/remove.ts");
+    const project = await makeTempDir("spinup-project-");
+    tempDirs.push(project);
+
+    await createShim("gone");
+    await registerProject("gone", project);
+    await removeRegisteredProject("gone");
+
+    expect(await getProject("gone")).toBeUndefined();
+    await expect(readFile(path.join(shimDir, "gone"), "utf8")).rejects.toThrow();
+  });
+
+  test("concurrent registrations from separate processes leave one wrapper and one entry", async () => {
+    const { configHome, shimDir } = await isolate();
+    const { execa } = await import("execa");
+    const project = await makeTempDir("spinup-project-");
+    tempDirs.push(project);
+
+    const runs = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        execa("bun", ["run", REGISTER_FIXTURE, "race"], {
+          cwd: project,
+          reject: false,
+          env: { ...process.env, XDG_CONFIG_HOME: configHome, SPINUP_SHIM_DIR: shimDir },
+        }),
+      ),
+    );
+
+    // A loser of the exclusive create is told so; nothing else may fail.
+    for (const run of runs) {
+      if (run.exitCode !== 0) {
+        expect(run.stderr).toContain("Another process created that file first");
+      }
+    }
+    expect(runs.some((run) => run.exitCode === 0)).toBe(true);
+
+    const wrapper = await readFile(path.join(shimDir, "race"), "utf8");
+    expect(wrapper).toBe(`#!/usr/bin/env bash\n# spinup-shim v1\nexec spinup --start "race" "$@"\n`);
+    expect(await getProject("race")).toBe(project);
+  }, 30_000);
+});
