@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { CONFIG_FILENAME, configExists, getConfigPath, loadConfig, saveConfig, stringifyConfig } from "../core/config.ts";
+import { backupConfig, CONFIG_FILENAME, configExists, getConfigPath, loadConfig, saveConfig, stringifyConfig } from "../core/config.ts";
 import { buildDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
@@ -100,7 +100,7 @@ type ServiceShape = {
   cmd: string;
   dependsOn: string;
   delay: string;
-  env: string;
+  env: Record<string, string>;
 };
 
 function describeService(item: Task | Pane): ServiceShape {
@@ -109,13 +109,48 @@ function describeService(item: Task | Pane): ServiceShape {
     cmd: item.cmd,
     dependsOn: (item.dependsOn ?? []).join(", ") || "none",
     delay: item.delay === undefined ? "none" : String(item.delay),
-    env: Object.keys(item.env ?? {}).sort().join(", ") || "none",
+    env: item.env ?? {},
   };
 }
 
+function actionItems(action: Action): Array<Task | Pane> {
+  return action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
+}
+
 function collectServices(action: Action): Map<string, ServiceShape> {
-  const items = action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
-  return new Map(items.map((item) => [item.name, describeService(item)]));
+  return new Map(actionItems(action).map((item) => [item.name, describeService(item)]));
+}
+
+/** Window identity for the preview: name, layout and pane membership, in order. */
+function describeWindows(action: Action): string {
+  if (action.mode !== "tmux") {
+    return "";
+  }
+
+  return action.windows
+    .map((window) => `${window.name}${window.layout ? `(${window.layout})` : ""}: ${window.panes.map((pane) => pane.name).join(", ")}`)
+    .join(" | ");
+}
+
+/** Reports which keys changed, never their values: the config can hold secrets. */
+function describeEnvChanges(current: Record<string, string>, next: Record<string, string>): string[] {
+  const changes: string[] = [];
+
+  for (const key of Object.keys(next).sort()) {
+    if (!(key in current)) {
+      changes.push(`+ env.${key}`);
+    } else if (current[key] !== next[key]) {
+      changes.push(`~ env.${key} (value changed)`);
+    }
+  }
+
+  for (const key of Object.keys(current).sort()) {
+    if (!(key in next)) {
+      changes.push(`- env.${key}`);
+    }
+  }
+
+  return changes;
 }
 
 /**
@@ -163,10 +198,14 @@ export function formatProposedChanges(current: SpinupConfig, next: SpinupConfig)
         continue;
       }
 
-      for (const field of Object.keys(nextShape) as Array<keyof ServiceShape>) {
+      for (const field of ["cwd", "cmd", "dependsOn", "delay"] as const) {
         if (currentShape[field] !== nextShape[field]) {
           changes.push(`~ ${actionName}.${name}.${field}: ${currentShape[field]} -> ${nextShape[field]}`);
         }
+      }
+
+      for (const envChange of describeEnvChanges(currentShape.env, nextShape.env)) {
+        changes.push(`${envChange.slice(0, 2)}${actionName}.${name}.${envChange.slice(2)}`);
       }
     }
 
@@ -175,16 +214,41 @@ export function formatProposedChanges(current: SpinupConfig, next: SpinupConfig)
         changes.push(`- ${actionName}.${name}`);
       }
     }
+
+    // Same members in a different order still changes start order and pane placement.
+    const currentOrder = actionItems(currentAction).map((item) => item.name);
+    const nextOrder = actionItems(nextAction).map((item) => item.name);
+
+    if (
+      currentOrder.length === nextOrder.length &&
+      currentOrder.every((name) => nextServices.has(name)) &&
+      currentOrder.join(",") !== nextOrder.join(",")
+    ) {
+      changes.push(`~ ${actionName}: order ${currentOrder.join(", ")} -> ${nextOrder.join(", ")}`);
+    }
+
+    const currentWindows = describeWindows(currentAction);
+    const nextWindows = describeWindows(nextAction);
+
+    if (currentWindows !== nextWindows && currentAction.mode === "tmux" && nextAction.mode === "tmux") {
+      changes.push(`~ ${actionName}.windows: ${currentWindows} -> ${nextWindows}`);
+    }
   }
 
   return changes;
 }
 
+/**
+ * The single path for replacing an existing config, registered or not. It shows
+ * what changes, says what the preview cannot express, requires an explicit yes,
+ * and keeps the previous bytes in a private backup before writing.
+ */
 async function regenerateWithPreview(alias: string, projectRoot: string): Promise<void> {
   const scanResult = await scanProject(projectRoot);
   const detection = detectProject(scanResult);
   const nextConfig = generateConfig(scanResult, alias);
-  const currentYaml = await readFile(getConfigPath(projectRoot), "utf8");
+  const configPath = getConfigPath(projectRoot);
+  const currentYaml = await readFile(configPath, "utf8");
   const currentConfig = await loadConfig(projectRoot);
   const diffLines = formatProposedChanges(currentConfig, nextConfig);
   const identical = stringifyConfig(nextConfig) === currentYaml;
@@ -193,14 +257,15 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   logDetection(detection);
   console.log("\n[config] proposed changes:\n");
 
-  if (diffLines.length === 0) {
-    // Structurally equal, but the file may still differ in comments or formatting;
-    // regeneration would discard those, so say so rather than claiming no changes.
-    console.log(identical ? "(no changes)\n" : "(no structural changes; regenerating would still rewrite comments and formatting)\n");
+  if (identical) {
+    console.log("(no changes)\n");
+    return;
+  }
 
-    if (identical) {
-      return;
-    }
+  if (diffLines.length === 0) {
+    // Structurally equal, but the file still differs in comments or formatting;
+    // regeneration would discard those, so say so rather than claiming no changes.
+    console.log("(no structural changes; regenerating would still rewrite comments and formatting)\n");
   }
 
   for (const line of diffLines) {
@@ -208,14 +273,22 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   }
 
   console.log("");
+  console.log(`[config] regenerating replaces ${path.basename(configPath)} entirely.`);
+  console.log("[config] custom actions, comments and formatting not listed above are lost.\n");
 
-  if (!(await confirmAction("Apply changes?", false))) {
+  if (!process.stdin.isTTY) {
+    // Fail closed: no prompt means no consent.
+    throw new Error("Regenerating replaces the project config and needs confirmation. Run this in a terminal.");
+  }
+
+  if (!(await confirmAction("Replace the config?", false))) {
     console.log("[config] regeneration cancelled");
     return;
   }
 
+  const backupPath = await backupConfig(projectRoot);
   await saveConfig(projectRoot, nextConfig);
-  console.log(`[config] updated ${CONFIG_FILENAME}\n`);
+  console.log(`[config] updated ${CONFIG_FILENAME} (previous copy in ${path.basename(backupPath)})\n`);
 }
 
 /**
@@ -231,14 +304,17 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
 export async function bootstrapProject(
   alias: string,
   projectRoot: string,
-  overwriteConfig: boolean,
+  configMode: "keep" | "generate" | "regenerate",
   options: BootstrapProjectOptions = {},
 ): Promise<void> {
   const outcome = await createShim(alias);
 
   try {
-    if (overwriteConfig) {
+    if (configMode === "generate") {
       await scanAndGenerate(alias, projectRoot, { quiet: options.quiet });
+    } else if (configMode === "regenerate") {
+      // An unregistered project with a config gets the same preview and consent.
+      await regenerateWithPreview(alias, projectRoot);
     }
 
     await registerProject(alias, projectRoot);
@@ -257,7 +333,8 @@ async function ensureProjectReady(alias: string, options: RunProjectOptions): Pr
   const hasConfig = await configExists(projectRoot);
 
   if (!registeredProjectRoot) {
-    await bootstrapProject(alias, projectRoot, !hasConfig || Boolean(options.regenerate), { quiet: true });
+    const configMode = !hasConfig ? "generate" : options.regenerate ? "regenerate" : "keep";
+    await bootstrapProject(alias, projectRoot, configMode, { quiet: true });
     return {
       projectRoot,
       bootstrapped: true,

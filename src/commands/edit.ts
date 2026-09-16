@@ -1,6 +1,6 @@
 import { execa } from "execa";
 
-import { CONFIG_FILENAME, configExists, formatConfigError, getConfigPath, loadConfig, saveConfig } from "../core/config.ts";
+import { CONFIG_FILENAME, configExists, formatConfigError, getConfigPath, loadConfig, saveConfigPatched } from "../core/config.ts";
 import { validateConfigPaths } from "../core/health.ts";
 import { promptForConfigEdits } from "../core/interactive.ts";
 import { getProject } from "../core/registry.ts";
@@ -74,6 +74,10 @@ export async function editProject(alias: string, options: EditProjectOptions = {
     return;
   }
 
+  if (!process.stdin.isTTY) {
+    throw new Error("--interactive needs a terminal. Use --edit without --interactive to open $EDITOR.");
+  }
+
   let config;
 
   try {
@@ -89,8 +93,14 @@ export async function editProject(alias: string, options: EditProjectOptions = {
     return;
   }
 
+  if (updatedConfig === config) {
+    // Saved without changing anything: the file keeps its exact bytes.
+    console.log("No changes.");
+    return;
+  }
+
   try {
-    await saveConfig(projectRoot, updatedConfig);
+    await saveConfigPatched(projectRoot, updatedConfig);
   } catch (error) {
     throw new Error(formatConfigError(error));
   }

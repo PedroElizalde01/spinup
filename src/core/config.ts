@@ -2,10 +2,10 @@ import { access, chmod, constants, lstat, open, readFile, realpath, rename, rm, 
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import YAML from "yaml";
+import YAML, { isMap, isSeq, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { z, ZodError } from "zod";
 
-import type { Pane, SpinupConfig, Task, Window } from "../types/config.ts";
+import type { Action, Pane, SpinupConfig, Task, Window } from "../types/config.ts";
 
 const taskSchema: z.ZodType<Task> = z.object({
   name: z.string().min(1),
@@ -138,6 +138,147 @@ export function stringifyConfig(config: SpinupConfig): string {
   return YAML.stringify(parsed);
 }
 
+type Runnable = Task | Pane;
+const RUNNABLE_FIELDS = ["name", "cwd", "cmd", "dependsOn", "delay", "env"] as const;
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function patchRunnable(doc: Document, node: YAMLMap, current: Runnable, next: Runnable): void {
+  for (const field of RUNNABLE_FIELDS) {
+    const value = next[field];
+
+    if (sameValue(current[field], value)) {
+      continue;
+    }
+
+    if (value === undefined) {
+      node.delete(field);
+    } else {
+      node.set(field, doc.createNode(value));
+    }
+  }
+}
+
+/**
+ * Patches a task/pane list in place: fields change on their own nodes, removed
+ * entries are deleted, added ones appended. Anything more (a reorder) replaces
+ * the list, since there is no comment-preserving way to express it.
+ */
+function patchRunnables(doc: Document, at: Array<string | number>, current: Runnable[], next: Runnable[]): void {
+  const seq = doc.getIn(at);
+
+  if (!isSeq(seq)) {
+    doc.setIn(at, doc.createNode(next));
+    return;
+  }
+
+  const currentByName = new Map(current.map((item, index) => [item.name, { item, index }]));
+  const nextNames = new Set(next.map((item) => item.name));
+
+  for (const item of next) {
+    const existing = currentByName.get(item.name);
+    const node = existing ? (seq as YAMLSeq).items[existing.index] : undefined;
+
+    if (existing && isMap(node)) {
+      patchRunnable(doc, node as YAMLMap, existing.item, item);
+    }
+  }
+
+  const removedIndexes = current
+    .map((item, index) => (nextNames.has(item.name) ? -1 : index))
+    .filter((index) => index >= 0)
+    .sort((left, right) => right - left);
+
+  for (const index of removedIndexes) {
+    (seq as YAMLSeq).delete(index);
+  }
+
+  for (const item of next) {
+    if (!currentByName.has(item.name)) {
+      (seq as YAMLSeq).add(doc.createNode(item));
+    }
+  }
+
+  const resultNames = ((seq as YAMLSeq).items as YAMLMap[]).map((node) => (isMap(node) ? String(node.get("name")) : ""));
+
+  if (!sameValue(resultNames, next.map((item) => item.name))) {
+    doc.setIn(at, doc.createNode(next));
+  }
+}
+
+function patchAction(doc: Document, at: Array<string | number>, current: Action, next: Action): void {
+  if (current.mode !== next.mode) {
+    doc.setIn(at, doc.createNode(next));
+    return;
+  }
+
+  if (current.mode === "simple" && next.mode === "simple") {
+    patchRunnables(doc, [...at, "tasks"], current.tasks ?? [], next.tasks ?? []);
+    return;
+  }
+
+  if (current.mode !== "tmux" || next.mode !== "tmux") {
+    return;
+  }
+
+  const sameWindows =
+    current.windows.length === next.windows.length &&
+    current.windows.every((window, index) => window.name === next.windows[index]?.name);
+
+  if (!sameWindows) {
+    doc.setIn([...at, "windows"], doc.createNode(next.windows));
+    return;
+  }
+
+  for (const [index, window] of next.windows.entries()) {
+    const before = current.windows[index]!;
+    const windowPath = [...at, "windows", index];
+
+    if (!sameValue(before.layout, window.layout)) {
+      if (window.layout === undefined) {
+        doc.deleteIn([...windowPath, "layout"]);
+      } else {
+        doc.setIn([...windowPath, "layout"], window.layout);
+      }
+    }
+
+    patchRunnables(doc, [...windowPath, "panes"], before.panes, window.panes);
+  }
+}
+
+/**
+ * Applies a structured edit to the file's own YAML document, so comments and
+ * formatting on everything that did not change survive. Reserializing from the
+ * parsed object dropped every comment in the file on any interactive save.
+ */
+export function patchConfigYaml(raw: string, next: SpinupConfig): string {
+  const doc = YAML.parseDocument(raw);
+  const current = configSchema.parse(doc.toJS()) as SpinupConfig;
+
+  for (const key of ["name", "root", "default"] as const) {
+    if (current[key] !== next[key]) {
+      doc.set(key, next[key]);
+    }
+  }
+
+  for (const actionName of new Set([...Object.keys(current.actions), ...Object.keys(next.actions)])) {
+    const before = current.actions[actionName];
+    const after = next.actions[actionName];
+
+    if (!after) {
+      doc.deleteIn(["actions", actionName]);
+    } else if (!before) {
+      doc.setIn(["actions", actionName], doc.createNode(after));
+    } else {
+      patchAction(doc, ["actions", actionName], before, after);
+    }
+  }
+
+  return doc.toString();
+}
+
 export const CONFIG_FILENAME = ".spinup.yml";
 export const LEGACY_CONFIG_FILENAME = ".runit.yml";
 
@@ -198,9 +339,50 @@ async function writePrivate(target: string, contents: string): Promise<void> {
  * secrets silently republished it as 0644.
  */
 export async function saveConfig(projectRoot: string, config: SpinupConfig): Promise<void> {
-  const configPath = getConfigPath(projectRoot);
   // Serialize first, so a validation failure cannot touch the existing file.
-  const contents = stringifyConfig(config);
+  await writeConfigText(projectRoot, stringifyConfig(config));
+}
+
+/** Saves a structured edit onto the existing file, keeping its comments. */
+export async function saveConfigPatched(projectRoot: string, next: SpinupConfig): Promise<void> {
+  const raw = await readFile(getConfigPath(projectRoot), "utf8");
+  const text = patchConfigYaml(raw, next);
+  // The patched document must still be the config we meant to write.
+  const reparsed = parseConfig(text);
+
+  if (JSON.stringify(reparsed) !== JSON.stringify(configSchema.parse(next))) {
+    // Fall back to a clean serialization rather than write something else.
+    await writeConfigText(projectRoot, stringifyConfig(next));
+    return;
+  }
+
+  await writeConfigText(projectRoot, text);
+}
+
+/**
+ * Keeps the exact previous bytes next to the config, privately, before a
+ * replacement. The name is fixed so a repeated regeneration does not pile up
+ * copies; the previous backup is dropped first, so a link there is never followed.
+ */
+export async function backupConfig(projectRoot: string): Promise<string> {
+  const configPath = getConfigPath(projectRoot);
+  const backupPath = `${configPath}.bak`;
+  const bytes = await readFile(configPath);
+
+  await rm(backupPath, { force: true });
+  const handle = await open(backupPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+
+  try {
+    await handle.writeFile(bytes);
+  } finally {
+    await handle.close();
+  }
+
+  return backupPath;
+}
+
+async function writeConfigText(projectRoot: string, contents: string): Promise<void> {
+  const configPath = getConfigPath(projectRoot);
 
   // A symlinked config is followed deliberately: replace what it points at, rather
   // than silently turning the user's link into a regular file.

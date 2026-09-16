@@ -2,7 +2,7 @@
 import { bootstrapProject } from "../../src/commands/run.ts";
 
 try {
-  await bootstrapProject(process.argv[2]!, process.cwd(), false);
+  await bootstrapProject(process.argv[2]!, process.cwd(), "keep");
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

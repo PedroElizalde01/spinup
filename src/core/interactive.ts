@@ -14,6 +14,8 @@ type EditableService = {
   source?: Task | Pane;
 };
 
+type Runnable = Task & Pane;
+
 function getEditableWindow(action: Action): Window | undefined {
   if (action.mode !== "tmux") {
     return undefined;
@@ -41,74 +43,84 @@ function extractServices(action: Action): EditableService[] {
 }
 
 /**
- * Drops a dependency that points at a service the user just removed, so the result
- * still validates.
+ * Removes references to services the user removed, and nothing else. Pruning
+ * against the edited window's names dropped every dependency on a service that
+ * lived in another window, even though that service still existed.
  */
-function pruneDependencies<T extends { name: string; dependsOn?: string[] }>(items: T[]): T[] {
-  const present = new Set(items.map((item) => item.name));
+function stripRemovedDependencies<T extends { dependsOn?: string[] }>(item: T, removed: Set<string>): T {
+  if (!item.dependsOn || removed.size === 0) {
+    return item;
+  }
 
-  return items.map((item) => {
-    if (!item.dependsOn) {
-      return item;
-    }
+  const kept = item.dependsOn.filter((dependency) => !removed.has(dependency));
 
-    const kept = item.dependsOn.filter((dependency) => present.has(dependency));
-    const { dependsOn: _dropped, ...rest } = item;
+  if (kept.length === item.dependsOn.length) {
+    return item;
+  }
 
-    return (kept.length > 0 ? { ...rest, dependsOn: kept } : rest) as T;
-  });
+  const { dependsOn: _dropped, ...rest } = item;
+  return (kept.length > 0 ? { ...rest, dependsOn: kept } : rest) as T;
 }
 
 function resolveTmuxLayout(serviceCount: number): string {
-  if (serviceCount === 2) {
-    return "even-horizontal";
-  }
-
-  if (serviceCount >= 3) {
-    return "tiled";
-  }
-
-  return "even-horizontal";
+  return serviceCount >= 3 ? "tiled" : "even-horizontal";
 }
 
-function toRunnable(service: EditableService): Task & Pane {
+function toRunnable(service: EditableService): Runnable {
   // Spread the original first so untouched fields are carried through unchanged.
   return {
     ...(service.source ?? {}),
     name: service.name,
     cwd: service.cwd,
     cmd: service.cmd,
-  } as Task & Pane;
+  } as Runnable;
 }
 
 function applyServicesToAction(
   action: Action,
   services: EditableService[],
   mode: "simple" | "tmux",
+  removed: Set<string>,
 ): Action {
-  const runnables = pruneDependencies(services.map(toRunnable));
+  const runnables = services.map(toRunnable).map((item) => stripRemovedDependencies(item, removed));
 
   if (mode === "simple") {
+    return { mode: "simple", tasks: runnables };
+  }
+
+  if (action.mode !== "tmux") {
+    // Converting from simple: this is the only case where a window is invented.
     return {
-      mode: "simple",
-      tasks: runnables,
+      mode: "tmux",
+      windows: [{ name: "services", layout: resolveTmuxLayout(runnables.length), panes: runnables }],
     };
   }
 
-  const editedWindow = action.mode === "tmux" ? getEditableWindow(action) : undefined;
-  const serviceWindow: Window = {
-    // Keep the window's own identity; only its panes were edited.
-    name: editedWindow?.name ?? "services",
-    layout: editedWindow?.layout ?? resolveTmuxLayout(services.length),
-    panes: runnables,
-  };
+  const editedWindow = getEditableWindow(action);
 
-  const extraWindows = action.mode === "tmux" ? action.windows.filter((window) => window !== editedWindow) : [];
-
+  // Every window stays where it was, with whatever fields it had. Only the edited
+  // window's panes change; the others only lose references to removed services.
   return {
     mode: "tmux",
-    windows: [serviceWindow, ...extraWindows],
+    windows: action.windows.map((window) =>
+      window === editedWindow
+        ? { ...window, panes: runnables }
+        : { ...window, panes: window.panes.map((pane) => stripRemovedDependencies(pane, removed)) },
+    ),
   };
+}
+
+function describeDroppedWindows(action: Action): string {
+  if (action.mode !== "tmux") {
+    return "";
+  }
+
+  const edited = getEditableWindow(action);
+
+  return action.windows
+    .filter((window) => window !== edited)
+    .map((window) => `"${window.name}" (${window.panes.map((pane) => pane.name).join(", ")})`)
+    .join(", ");
 }
 
 async function promptServiceSelection(services: EditableService[], message: string): Promise<number> {
@@ -128,6 +140,10 @@ export async function confirmAction(message: string, defaultValue = false): Prom
   });
 }
 
+/**
+ * Returns the very same object when the user saved without changing anything, so
+ * the caller can skip the write and leave the file's bytes alone.
+ */
 export async function promptForConfigEdits(config: SpinupConfig): Promise<SpinupConfig | null> {
   const defaultActionName = config.default;
   const defaultAction = config.actions[defaultActionName];
@@ -138,7 +154,9 @@ export async function promptForConfigEdits(config: SpinupConfig): Promise<Spinup
 
   let nextMode: "simple" | "tmux" = defaultAction.mode;
   let services = extractServices(defaultAction);
-  const hasExtraTmuxWindows = defaultAction.mode === "tmux" && defaultAction.windows.length > 1;
+  const removed = new Set<string>();
+  let dirty = false;
+  const droppedWindows = describeDroppedWindows(defaultAction);
 
   while (true) {
     const action = await select({
@@ -159,15 +177,19 @@ export async function promptForConfigEdits(config: SpinupConfig): Promise<Spinup
     }
 
     if (action === "save") {
+      if (!dirty) {
+        return config;
+      }
+
       if (services.length === 0) {
-        throw new Error('At least one service is required for the default action.');
+        throw new Error("At least one service is required for the default action.");
       }
 
       return {
         ...config,
         actions: {
           ...config.actions,
-          [defaultActionName]: applyServicesToAction(defaultAction, services, nextMode),
+          [defaultActionName]: applyServicesToAction(defaultAction, services, nextMode, removed),
         },
       };
     }
@@ -178,16 +200,27 @@ export async function promptForConfigEdits(config: SpinupConfig): Promise<Spinup
       const cmd = await input({ message: "Command", default: "npm start" });
 
       services = [...services, { name, cwd, cmd }];
+      removed.delete(name);
+      dirty = true;
       continue;
     }
 
     if (action === "mode") {
-      nextMode = nextMode === "simple" ? "tmux" : "simple";
+      const target = nextMode === "simple" ? "tmux" : "simple";
 
-      if (hasExtraTmuxWindows && nextMode === "simple") {
-        console.log('Warning: switching to "simple" keeps only the primary services window.');
+      if (target === "simple" && droppedWindows) {
+        const proceed = await confirmAction(
+          `Switching to "simple" keeps only the edited window and drops ${droppedWindows}. Continue?`,
+          false,
+        );
+
+        if (!proceed) {
+          continue;
+        }
       }
 
+      nextMode = target;
+      dirty = nextMode !== defaultAction.mode || dirty;
       continue;
     }
 
@@ -197,31 +230,33 @@ export async function promptForConfigEdits(config: SpinupConfig): Promise<Spinup
     }
 
     const selectedIndex = await promptServiceSelection(services, "Select a service");
+    const selected = services[selectedIndex]!;
 
     if (action === "remove") {
       services = services.filter((_, index) => index !== selectedIndex);
+      removed.add(selected.name);
+      dirty = true;
       continue;
     }
 
     if (action === "command") {
-      const cmd = await input({
-        message: `Command for ${services[selectedIndex].name}`,
-        default: services[selectedIndex].cmd,
-      });
-      services = services.map((service, index) =>
-        index === selectedIndex ? { ...service, cmd } : service,
-      );
+      const cmd = await input({ message: `Command for ${selected.name}`, default: selected.cmd });
+
+      if (cmd !== selected.cmd) {
+        services = services.map((service, index) => (index === selectedIndex ? { ...service, cmd } : service));
+        dirty = true;
+      }
+
       continue;
     }
 
     if (action === "cwd") {
-      const cwd = await input({
-        message: `Working directory for ${services[selectedIndex].name}`,
-        default: services[selectedIndex].cwd,
-      });
-      services = services.map((service, index) =>
-        index === selectedIndex ? { ...service, cwd } : service,
-      );
+      const cwd = await input({ message: `Working directory for ${selected.name}`, default: selected.cwd });
+
+      if (cwd !== selected.cwd) {
+        services = services.map((service, index) => (index === selectedIndex ? { ...service, cwd } : service));
+        dirty = true;
+      }
     }
   }
 }

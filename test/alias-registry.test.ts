@@ -334,7 +334,7 @@ describe("registration and removal stay consistent across files", () => {
     await chmod(configDir, 0o500);
 
     try {
-      await expect(bootstrapProject("rollback", project, false)).rejects.toThrow();
+      await expect(bootstrapProject("rollback", project, "keep")).rejects.toThrow();
       await expect(readFile(path.join(shimDir, "rollback"), "utf8")).rejects.toThrow();
     } finally {
       await chmod(configDir, 0o700);
