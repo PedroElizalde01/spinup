@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -8,10 +9,10 @@ import {
   createSession,
   createWindow,
   ensureTmuxInstalled,
-  exactTarget,
-  killSession,
+  findSessionId,
   killSessionQuietly,
-  sessionExists,
+  markSessionOwner,
+  readSessionOwner,
 } from "./session.ts";
 import type { Pane, SpinupConfig, TmuxAction } from "../types/config.ts";
 
@@ -91,28 +92,61 @@ async function startPanes(
   }
 }
 
+/**
+ * Symlinked checkouts and case differences must not make one project look like two,
+ * or a relaunch would refuse its own session.
+ */
+async function canonicalProject(projectRoot: string): Promise<string> {
+  try {
+    return await realpath(projectRoot);
+  } catch {
+    return path.resolve(projectRoot);
+  }
+}
+
 export async function launchTmuxWorkspace(
   projectRoot: string,
   config: SpinupConfig,
   action: TmuxAction,
   sessionName: string,
   environment: NodeJS.ProcessEnv,
+  actionName = config.default,
 ): Promise<void> {
   await ensureTmuxInstalled();
+
+  const owner = { project: await canonicalProject(projectRoot), action: actionName };
+
+  const runningId = await findSessionId(sessionName);
+
+  if (runningId) {
+    const existing = await readSessionOwner(runningId);
+
+    if (existing && existing.project === owner.project && existing.action === owner.action) {
+      // Same project, same action: the user's running work is what they asked for.
+      console.log(`[tmux] session "${sessionName}" is already running, attaching`);
+      await attachSession(sessionName, runningId);
+      return;
+    }
+
+    const who = existing
+      ? `it belongs to ${existing.project} (action "${existing.action}")`
+      : "it was not created by spinup";
+    throw new Error(
+      `tmux session "${sessionName}" already exists and ${who}.\n` +
+        `Attach with: tmux attach -t =${sessionName}\n` +
+        `Or end it with: tmux kill-session -t =${sessionName}`,
+    );
+  }
 
   console.log("[tmux] launching tmux workspace\n");
   console.log(`Session: ${sessionName}`);
   console.log(`Windows: ${action.windows.length}`);
   console.log(`Panes: ${countPanes(action)}`);
 
-  if (await sessionExists(sessionName)) {
-    console.log("[tmux] resetting existing session");
-    await killSession(exactTarget(sessionName));
-  }
-
   const { sessionId, windowId, paneId } = await createSession(sessionName);
 
   try {
+    await markSessionOwner(sessionId, owner);
     const placed = await buildWorkspace(sessionId, windowId, paneId, action);
     console.log("[deps] resolving dependencies");
     await startPanes(projectRoot, config, placed, environment);

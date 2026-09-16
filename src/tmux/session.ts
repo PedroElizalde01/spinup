@@ -25,9 +25,68 @@ function isTmuxMissing(error: unknown): boolean {
   );
 }
 
-async function runTmux(args: string[]): Promise<string> {
-  const { stdout } = await execa("tmux", args);
-  return stdout.trim();
+export type SessionOwner = {
+  /** Canonical project root the session was created for. */
+  project: string;
+  action: string;
+};
+
+type RunTmuxOptions = {
+  /** Values that must never appear in an error, such as environment values passed with -e. */
+  redact?: string[];
+};
+
+/**
+ * A tmux failure that reports what was attempted without echoing the argv. Execa's
+ * own error carries the full command line, which for respawn-pane includes every
+ * -e KEY=VALUE, and the CLI prints whatever message reaches it.
+ */
+export class TmuxError extends Error {
+  readonly operation: string;
+  readonly target: string | undefined;
+  readonly exitCode: number | undefined;
+
+  constructor(operation: string, target: string | undefined, exitCode: number | undefined, stderr: string) {
+    const where = target ? ` for ${target}` : "";
+    const status = exitCode === undefined ? "" : ` (exit ${exitCode})`;
+    const detail = stderr ? `: ${stderr}` : "";
+    super(`tmux ${operation} failed${where}${status}${detail}`);
+    this.name = "TmuxError";
+    this.operation = operation;
+    this.target = target;
+    this.exitCode = exitCode;
+  }
+}
+
+function redactText(text: string, secrets: string[]): string {
+  let result = text;
+
+  for (const secret of secrets) {
+    if (secret.length > 0) {
+      result = result.split(secret).join("***");
+    }
+  }
+
+  return result;
+}
+
+export async function runTmux(args: string[], options: RunTmuxOptions = {}): Promise<string> {
+  try {
+    const { stdout } = await execa("tmux", args);
+    return stdout.trim();
+  } catch (error) {
+    if (isTmuxMissing(error)) {
+      throw new Error(TMUX_NOT_INSTALLED_MESSAGE);
+    }
+
+    const failure = error as { exitCode?: number; stderr?: string };
+    const targetIndex = args.indexOf("-t");
+    const target = targetIndex >= 0 ? args[targetIndex + 1] : undefined;
+    const stderr = redactText((failure.stderr ?? "").split("\n")[0]?.trim() ?? "", options.redact ?? []);
+
+    // No `cause`: a serialized cause would carry the original argv back out.
+    throw new TmuxError(args[0] ?? "command", target, failure.exitCode, stderr);
+  }
 }
 
 /**
@@ -72,16 +131,62 @@ export async function sessionExists(sessionName: string): Promise<boolean> {
     await runTmux(["has-session", "-t", exactTarget(sessionName)]);
     return true;
   } catch (error) {
-    if (isTmuxMissing(error)) {
-      throw new Error(TMUX_NOT_INSTALLED_MESSAGE);
-    }
-
-    if ("exitCode" in (error as Record<string, unknown>) && (error as { exitCode?: number }).exitCode === 1) {
+    if (error instanceof TmuxError && error.exitCode === 1) {
       return false;
     }
 
     throw error;
   }
+}
+
+/**
+ * Ownership lives in session-scoped user options, so it survives renames of the
+ * project directory's contents and never touches global tmux settings.
+ */
+export async function markSessionOwner(sessionId: string, owner: SessionOwner): Promise<void> {
+  await runTmux(["set-option", "-t", sessionId, "@spinup_project", owner.project]);
+  await runTmux(["set-option", "-t", sessionId, "@spinup_action", owner.action]);
+}
+
+/**
+ * The id of the session with exactly this name, or null. show-options takes a
+ * target-pane, where "=name" is not understood, so ownership lookups go by id.
+ */
+export async function findSessionId(sessionName: string): Promise<string | null> {
+  let listed: string;
+
+  try {
+    listed = await runTmux(["list-sessions", "-F", "#{session_id} #{session_name}"]);
+  } catch (error) {
+    // No server running is exit 1, the same as "no sessions".
+    if (error instanceof TmuxError && error.exitCode === 1) {
+      return null;
+    }
+
+    throw error;
+  }
+
+  for (const row of listed.split("\n")) {
+    const separator = row.indexOf(" ");
+    if (separator > 0 && row.slice(separator + 1) === sessionName) {
+      return row.slice(0, separator);
+    }
+  }
+
+  return null;
+}
+
+/** Null for a session spinup did not create. */
+export async function readSessionOwner(sessionId: string): Promise<SessionOwner | null> {
+  // -q keeps an unset user option from being reported as an error.
+  const project = await runTmux(["show-options", "-t", sessionId, "-qv", "@spinup_project"]);
+  const action = await runTmux(["show-options", "-t", sessionId, "-qv", "@spinup_action"]);
+
+  if (!project || !action) {
+    return null;
+  }
+
+  return { project, action };
 }
 
 /**
@@ -130,13 +235,10 @@ export async function createWindow(sessionId: string, name: string): Promise<{ w
   return { windowId, paneId };
 }
 
-export async function killSession(target: string): Promise<void> {
-  await runTmux(["kill-session", "-t", target]);
-}
-
-export async function killSessionQuietly(target: string): Promise<void> {
+/** Only for a session this invocation created, identified by the id tmux returned. */
+export async function killSessionQuietly(sessionId: string): Promise<void> {
   try {
-    await killSession(target);
+    await runTmux(["kill-session", "-t", sessionId]);
   } catch {
     // Nothing to clean up.
   }

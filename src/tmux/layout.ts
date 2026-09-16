@@ -1,15 +1,10 @@
-import { execa } from "execa";
+import { runTmux } from "./session.ts";
 
 export type PaneSpawn = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   cmd: string;
 };
-
-async function runTmux(args: string[]): Promise<string> {
-  const { stdout } = await execa("tmux", args);
-  return stdout.trim();
-}
 
 /**
  * tmux takes environment as repeated -e KEY=VALUE arguments and hands them to the
@@ -54,14 +49,10 @@ export async function applyWindowLayout(windowId: string, layout?: string): Prom
  * directory and environment. -k kills the placeholder shell first.
  */
 export async function respawnPane(paneId: string, spawn: PaneSpawn): Promise<void> {
-  await runTmux([
-    "respawn-pane",
-    "-k",
-    "-t",
-    paneId,
-    "-c",
-    spawn.cwd,
-    ...toEnvArgs(spawn.env),
-    spawn.cmd,
-  ]);
+  const values = Object.values(spawn.env).filter((value): value is string => typeof value === "string");
+
+  await runTmux(
+    ["respawn-pane", "-k", "-t", paneId, "-c", spawn.cwd, ...toEnvArgs(spawn.env), spawn.cmd],
+    { redact: values },
+  );
 }

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { execa } from "execa";
 
+import { respawnPane } from "../src/tmux/layout.ts";
 import { launchTmuxWorkspace } from "../src/tmux/runner.ts";
 import type { SpinupConfig, TmuxAction } from "../src/types/config.ts";
 
@@ -191,6 +192,69 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
       reject: false,
     });
     expect(sessions.exitCode).not.toBe(0);
+  }, 30_000);
+
+  test("reattaches to its own running session instead of resetting it", async () => {
+    const projectRoot = await isolateTmux();
+    const action = sleepPanes(2);
+
+    await launchTmuxWorkspace(projectRoot, config(action), action, "own", {});
+    const before = await tmux(["list-panes", "-t", "=own", "-F", "#{pane_id} #{pane_pid}"]);
+
+    // Relaunching used to kill-session and rebuild, restarting every process.
+    await launchTmuxWorkspace(projectRoot, config(action), action, "own", {});
+    const after = await tmux(["list-panes", "-t", "=own", "-F", "#{pane_id} #{pane_pid}"]);
+
+    expect(after).toBe(before);
+  }, 30_000);
+
+  test("refuses an exact-name session it did not create", async () => {
+    const projectRoot = await isolateTmux();
+    await tmux(["new-session", "-d", "-s", "api", "sleep 30"]);
+    const before = await tmux(["list-panes", "-t", "=api", "-F", "#{pane_pid}"]);
+
+    const action = sleepPanes(1);
+    await expect(launchTmuxWorkspace(projectRoot, config(action), action, "api", {})).rejects.toThrow(
+      /not created by spinup/,
+    );
+
+    expect(await tmux(["list-panes", "-t", "=api", "-F", "#{pane_pid}"])).toBe(before);
+  }, 30_000);
+
+  test("refuses a session owned by another project or action", async () => {
+    const projectA = await isolateTmux();
+    const projectB = await mkdtemp(path.join(tmpdir(), "rt-proj-"));
+    projectDirs.push(projectB);
+    const action = sleepPanes(1);
+
+    await launchTmuxWorkspace(projectA, config(action), action, "shared", {});
+    const before = await tmux(["list-panes", "-t", "=shared", "-F", "#{pane_pid}"]);
+
+    await expect(launchTmuxWorkspace(projectB, config(action), action, "shared", {})).rejects.toThrow(/belongs to/);
+    await expect(launchTmuxWorkspace(projectA, config(action), action, "shared", {}, "other")).rejects.toThrow(
+      /action "dev"/,
+    );
+
+    expect(await tmux(["list-panes", "-t", "=shared", "-F", "#{pane_pid}"])).toBe(before);
+  }, 30_000);
+
+  test("keeps environment values out of tmux failure messages", async () => {
+    const projectRoot = await isolateTmux();
+    await tmux(["new-session", "-d", "-s", "errs", "sleep 30"]);
+
+    // A pane that does not exist fails respawn-pane after the -e arguments were built.
+    const failure = await respawnPane("%424242", {
+      cwd: projectRoot,
+      env: { SPINUP_TEST_SECRET: "top-secret-value" },
+      cmd: "sleep 30",
+    }).catch((error: unknown) => error as Error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const serialized = `${failure.message}\n${failure.stack ?? ""}\n${JSON.stringify(failure)}`;
+    expect(serialized).not.toContain("top-secret-value");
+    expect(serialized).not.toContain("SPINUP_TEST_SECRET");
+    expect(failure.message).toContain("respawn-pane");
+    expect(failure.message).toContain("%424242");
   }, 30_000);
 
   test("never destroys a session whose name merely shares a prefix", async () => {

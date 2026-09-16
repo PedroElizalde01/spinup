@@ -300,7 +300,7 @@ export async function executeAction(
 
   if (action.mode === "tmux") {
     const sessionName = options.sessionName ?? config.name;
-    await launchTmuxWorkspace(projectRoot, config, action, sessionName, options.environment ?? process.env);
+    await launchTmuxWorkspace(projectRoot, config, action, sessionName, options.environment ?? process.env, actionName);
     return;
   }
 
