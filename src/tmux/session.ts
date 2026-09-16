@@ -195,11 +195,20 @@ export async function readSessionOwner(sessionId: string): Promise<SessionOwner 
  * many users set to 1.
  */
 export async function createSession(sessionName: string): Promise<CreatedSession> {
+  // A detached session has no client to size it and defaults to 80x24, where a
+  // few splits already fail with "no space for new pane". Use the launching
+  // terminal's size, or a generous one; tmux resizes when a client attaches.
+  const columns = String(process.stdout.columns || 200);
+  const rows = String(process.stdout.rows || 50);
   const output = await runTmux([
     "new-session",
     "-d",
     "-s",
     sessionName,
+    "-x",
+    columns,
+    "-y",
+    rows,
     "-P",
     "-F",
     "#{session_id} #{window_id} #{pane_id}",
@@ -234,6 +243,40 @@ export async function createWindow(sessionId: string, name: string): Promise<{ w
 
   return { windowId, paneId };
 }
+
+/**
+ * Makes the session's environment exactly the given one. A pane's environment is
+ * the server's global environment plus the session's, plus -e overrides, so a
+ * server started weeks ago still contributes keys nobody asked for. Every key
+ * present at either level and absent from `wanted` is marked removed for this
+ * session; -e on pane creation then supplies the rest. Global server state is
+ * never modified. tmux's own per-pane variables are left to tmux.
+ */
+export async function isolateSessionEnvironment(sessionId: string, wanted: Set<string>): Promise<void> {
+  const listed = await Promise.all([
+    runTmux(["show-environment", "-g"]),
+    runTmux(["show-environment", "-t", sessionId]),
+  ]);
+  const present = new Set<string>();
+
+  for (const line of listed.flatMap((block) => block.split("\n"))) {
+    // "KEY=value" for set variables, "-KEY" for ones already marked removed.
+    if (line.startsWith("-") || line.length === 0) {
+      continue;
+    }
+
+    present.add(line.slice(0, line.indexOf("=") === -1 ? line.length : line.indexOf("=")));
+  }
+
+  for (const key of present) {
+    if (!wanted.has(key) && !TMUX_OWNED_KEYS.has(key)) {
+      await runTmux(["set-environment", "-t", sessionId, "-r", key]);
+    }
+  }
+}
+
+/** Set by tmux itself for each pane; passing the caller's would be wrong. */
+export const TMUX_OWNED_KEYS = new Set(["TMUX", "TMUX_PANE"]);
 
 /** Only for a session this invocation created, identified by the id tmux returned. */
 export async function killSessionQuietly(sessionId: string): Promise<void> {

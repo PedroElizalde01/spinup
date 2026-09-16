@@ -232,3 +232,60 @@ describe("simple-mode lifecycle", () => {
     expect(result.exitCode).toBe(42);
   }, 20_000);
 });
+
+describe("output forwarding", () => {
+  // The prefixer ignored sink.write()'s return value, so a slow consumer let the
+  // parent queue the task's entire output in memory.
+  test("a slow sink applies backpressure to the source", async () => {
+    const { PassThrough, Readable, Writable } = await import("node:stream");
+    const { pipePrefixedOutput } = await import("../src/core/executor.ts");
+
+    let buffered = 0;
+    let maxBuffered = 0;
+    let delivered = 0;
+    const sink = new Writable({
+      highWaterMark: 1024,
+      write(chunk, _encoding, done) {
+        buffered += chunk.length;
+        maxBuffered = Math.max(maxBuffered, buffered);
+        // Drain slowly, one chunk every few milliseconds.
+        setTimeout(() => {
+          buffered -= chunk.length;
+          delivered += chunk.length;
+          done();
+        }, 2);
+      },
+    });
+
+    const source = new PassThrough({ highWaterMark: 4096 });
+    pipePrefixedOutput(source as unknown as Readable, "[slow] ", sink);
+
+    // Push far more than the sink can absorb; a bounded pipe rejects writes.
+    let rejected = 0;
+    const line = `${"x".repeat(100)}\n`;
+
+    for (let index = 0; index < 5000; index += 1) {
+      if (!source.write(line)) {
+        rejected += 1;
+        await new Promise<void>((resolve) => source.once("drain", resolve));
+      }
+    }
+
+    source.end();
+
+    // The sink is the parent's stdout in real use and is never ended by the pipe,
+    // so completion is "every prefixed byte arrived", not "finish".
+    const expected = 5000 * ("[slow] ".length + line.length);
+    const deadline = Date.now() + 30_000;
+
+    while (delivered < expected && Date.now() < deadline) {
+      await Bun.sleep(10);
+    }
+
+    expect(delivered).toBe(expected);
+
+    expect(rejected).toBeGreaterThan(0);
+    // The sink never held more than roughly its own high-water mark.
+    expect(maxBuffered).toBeLessThan(64 * 1024);
+  }, 60_000);
+});

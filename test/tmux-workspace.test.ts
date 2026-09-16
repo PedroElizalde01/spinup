@@ -260,6 +260,55 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
     expect(failure.message).toContain("%424242");
   }, 30_000);
 
+  test("builds every pane when the user sets base-index and pane-base-index to 1", async () => {
+    const projectRoot = await isolateTmux();
+    // Start the private server with the user's indexing before anything else.
+    await tmux(["new-session", "-d", "-s", "settings", "sleep 300"]);
+    await tmux(["set-option", "-g", "base-index", "1"]);
+    await tmux(["set-option", "-g", "pane-base-index", "1"]);
+
+    const action: TmuxAction = {
+      mode: "tmux",
+      windows: [
+        { name: "alpha", panes: [{ name: "a1", cwd: ".", cmd: "sleep 30" }, { name: "a2", cwd: ".", cmd: "sleep 30" }] },
+        { name: "beta", panes: [{ name: "b1", cwd: ".", cmd: "sleep 30" }] },
+      ],
+    };
+
+    await launchTmuxWorkspace(projectRoot, config(action), action, "indexed", {});
+
+    expect((await tmux(["list-panes", "-s", "-t", "=indexed", "-F", "#{window_name}"])).split("\n")).toEqual(["alpha", "alpha", "beta"]);
+  }, 30_000);
+
+  test("a pane gets exactly the launch environment, not stale server variables", async () => {
+    const projectRoot = await isolateTmux();
+    // A server that was started with a variable nobody wants any more.
+    await tmux(["new-session", "-d", "-s", "old", "sleep 300"]);
+    await tmux(["set-environment", "-g", "SPINUP_STALE_SERVER_VAR", "leftover"]);
+
+    const action: TmuxAction = {
+      mode: "tmux",
+      windows: [
+        {
+          name: "services",
+          panes: [{ name: "probe", cwd: ".", cmd: "sh -c 'env > env.txt; sleep 30'" }],
+        },
+      ],
+    };
+
+    await launchTmuxWorkspace(projectRoot, config(action), action, "cleanenv", {
+      PATH: process.env.PATH,
+      SPINUP_WANTED: "yes",
+    });
+    await Bun.sleep(1200);
+
+    const recorded = await Bun.file(path.join(projectRoot, "env.txt")).text();
+    expect(recorded).toContain("SPINUP_WANTED=yes");
+    expect(recorded).not.toContain("SPINUP_STALE_SERVER_VAR");
+    // tmux's own per-pane variable is still tmux's, not the launcher's.
+    expect(recorded).toMatch(/^TMUX_PANE=%\d+$/m);
+  }, 30_000);
+
   test("never destroys a session whose name merely shares a prefix", async () => {
     const projectRoot = await isolateTmux();
 

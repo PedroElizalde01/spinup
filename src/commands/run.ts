@@ -585,8 +585,11 @@ async function startConfiguredProject(alias: string, projectRoot: string, option
     console.log("[run] starting dev environment...");
   }
 
+  // The whole application environment, decided once: the invoking shell, then the
+  // selected files where the shell did not already set a key. Both backends get
+  // exactly this; a task's own env: block is layered on top by the backend.
   await executeAction(projectRoot, config, actionName, {
-    environment: env.applied,
+    environment: { ...process.env, ...env.applied },
     sessionName: sessionNameFor(alias, config, actionName),
   });
 }

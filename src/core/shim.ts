@@ -1,4 +1,4 @@
-import { chmod, constants, lstat, mkdir, open, readFile, realpath, rename, rm, unlink } from "node:fs/promises";
+import { chmod, constants, link, lstat, mkdir, open, readFile, realpath, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { validateAlias } from "./registry.ts";
@@ -123,9 +123,31 @@ async function createExclusive(target: string, contents: string): Promise<void> 
   await chmod(target, 0o755);
 }
 
+function stagingPath(target: string): string {
+  return `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
+}
+
+/**
+ * Publishes a complete wrapper at a path where nothing exists yet. The body is
+ * written to a private staging file first, then link() gives it the final name:
+ * link never overwrites, never follows a symlink at the destination, and the
+ * wrapper appears with its whole body and mode at once. Creating the final path
+ * exclusively and then writing it left an empty executable visible in between.
+ */
+async function publishNew(target: string, contents: string): Promise<void> {
+  const temporaryPath = stagingPath(target);
+
+  try {
+    await createExclusive(temporaryPath, contents);
+    await link(temporaryPath, target);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
 /** Replaces an already-approved wrapper without ever following a final symlink. */
 async function replaceOwned(target: string, contents: string): Promise<void> {
-  const temporaryPath = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  const temporaryPath = stagingPath(target);
 
   try {
     await createExclusive(temporaryPath, contents);
@@ -158,14 +180,21 @@ export async function createShim(alias: string): Promise<ShimOutcome> {
       }
 
       try {
-        await createExclusive(shimPath, buildShimContents(normalizedAlias));
+        await publishNew(shimPath, buildShimContents(normalizedAlias));
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          // Another process won the race; re-evaluate rather than overwrite.
-          throw describeRefusal(shimPath, "Another process created that file first.");
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
         }
 
-        throw error;
+        // Another process won the race. Whatever it published is complete, so
+        // judge it like any existing file rather than refusing outright.
+        const winner = await classify(shimPath);
+
+        if (winner.kind === "file" && isCurrentWrapper(winner.contents, normalizedAlias)) {
+          return "unchanged";
+        }
+
+        throw describeRefusal(shimPath, "Another process created that file first.");
       }
 
       return "created";

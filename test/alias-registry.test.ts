@@ -391,13 +391,10 @@ describe("registration and removal stay consistent across files", () => {
       ),
     );
 
-    // A loser of the exclusive create is told so; nothing else may fail.
+    // Every process sees either its own wrapper or the winner's complete one.
     for (const run of runs) {
-      if (run.exitCode !== 0) {
-        expect(run.stderr).toContain("Another process created that file first");
-      }
+      expect(`${run.exitCode} ${run.stderr}`).toBe("0 ");
     }
-    expect(runs.some((run) => run.exitCode === 0)).toBe(true);
 
     const wrapper = await readFile(path.join(shimDir, "race"), "utf8");
     expect(wrapper).toBe(`#!/usr/bin/env bash\n# spinup-shim v1\nexec spinup --start "race" "$@"\n`);

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Readable, Writable } from "node:stream";
+import { Transform, type Readable, type Writable } from "node:stream";
 
 import { execa } from "execa";
 
@@ -58,38 +58,55 @@ function exitCodeFor(error: unknown): number {
 }
 
 /**
- * Streams prefixed output without buffering the whole run. setEncoding keeps
- * multi-byte characters intact when one lands across a chunk boundary.
+ * Prefixes each line. As a Transform in a pipe() chain it inherits stream
+ * backpressure: when the sink stops accepting, the child's pipe fills and the
+ * child blocks, instead of this process queueing its output without bound.
+ * decodeStrings:false with an upstream setEncoding keeps multi-byte characters
+ * intact across chunk boundaries.
  */
-function pipePrefixedOutput(stream: Readable | undefined, prefix: string, sink: Writable): void {
+class LinePrefixer extends Transform {
+  private pending = "";
+
+  constructor(private readonly prefix: string) {
+    super({ decodeStrings: false });
+  }
+
+  override _transform(chunk: string | Buffer, _encoding: BufferEncoding, done: () => void): void {
+    this.pending += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    const lines = this.pending.split(/\r?\n/);
+    this.pending = lines.pop() ?? "";
+
+    for (const line of lines) {
+      this.push(`${this.prefix}${line}\n`);
+    }
+
+    // Never let an unterminated line grow without bound.
+    if (this.pending.length > MAX_PENDING_LINE_LENGTH) {
+      this.push(`${this.prefix}${this.pending}\n`);
+      this.pending = "";
+    }
+
+    done();
+  }
+
+  override _flush(done: () => void): void {
+    if (this.pending.length > 0) {
+      this.push(`${this.prefix}${this.pending}\n`);
+    }
+
+    done();
+  }
+}
+
+/** Exported for the backpressure regression; the executor is its only caller. */
+export function pipePrefixedOutput(stream: Readable | undefined, prefix: string, sink: Writable): void {
   if (!stream) {
     return;
   }
 
-  let pending = "";
   stream.setEncoding("utf8");
-
-  stream.on("data", (chunk: string) => {
-    pending += chunk;
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop() ?? "";
-
-    for (const line of lines) {
-      sink.write(`${prefix}${line}\n`);
-    }
-
-    // Never let an unterminated line grow without bound.
-    if (pending.length > MAX_PENDING_LINE_LENGTH) {
-      sink.write(`${prefix}${pending}\n`);
-      pending = "";
-    }
-  });
-
-  stream.on("end", () => {
-    if (pending.length > 0) {
-      sink.write(`${prefix}${pending}\n`);
-    }
-  });
+  // end:false, the sink is the parent's stdout/stderr and outlives every task.
+  stream.pipe(new LinePrefixer(prefix)).pipe(sink, { end: false });
 }
 
 function resolveTaskCwd(projectRoot: string, config: SpinupConfig, task: Task): string {
@@ -269,6 +286,8 @@ async function runSimpleAction(
           ...task.env,
         },
         shell: true,
+        // The environment given here is the whole environment; nothing is merged in.
+        extendEnv: false,
         buffer: false,
         // Own process group, so shutdown reaches the shell's descendants too.
         detached: true,

@@ -10,9 +10,11 @@ import {
   createWindow,
   ensureTmuxInstalled,
   findSessionId,
+  isolateSessionEnvironment,
   killSessionQuietly,
   markSessionOwner,
   readSessionOwner,
+  TMUX_OWNED_KEYS,
 } from "./session.ts";
 import type { Pane, SpinupConfig, TmuxAction } from "../types/config.ts";
 
@@ -80,9 +82,15 @@ async function startPanes(
   const ordered = buildDependencyGraph(placed.map(({ pane }) => pane));
 
   for (const pane of ordered) {
+    const env: NodeJS.ProcessEnv = { ...environment, ...pane.env };
+
+    for (const key of TMUX_OWNED_KEYS) {
+      delete env[key];
+    }
+
     await respawnPane(paneIds.get(pane.name)!, {
       cwd: resolvePaneCwd(projectRoot, config, pane.cwd),
-      env: { ...environment, ...pane.env },
+      env,
       cmd: pane.cmd,
     });
 
@@ -147,6 +155,7 @@ export async function launchTmuxWorkspace(
 
   try {
     await markSessionOwner(sessionId, owner);
+    await isolateSessionEnvironment(sessionId, new Set(Object.keys(environment)));
     const placed = await buildWorkspace(sessionId, windowId, paneId, action);
     console.log("[deps] resolving dependencies");
     await startPanes(projectRoot, config, placed, environment);
