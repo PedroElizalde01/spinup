@@ -469,9 +469,22 @@ function line(value = ""): string {
   return `${frame("│")}${padVisible(value, BOX_INNER_WIDTH)}${frame("│")}`;
 }
 
-function wrapText(value: string, width: number): string[] {
+export function wrapText(value: string, width: number): string[] {
   if (visibleLength(value) <= width) {
     return [value];
+  }
+
+  // A value with no separator, such as a long path, is broken hard; otherwise it
+  // ran past the card's right border.
+  if (!value.includes(", ")) {
+    const plain = value.replace(ANSI_PATTERN, "");
+    const chunks: string[] = [];
+
+    for (let index = 0; index < plain.length; index += width) {
+      chunks.push(plain.slice(index, index + width));
+    }
+
+    return chunks;
   }
 
   const words = value.split(", ");

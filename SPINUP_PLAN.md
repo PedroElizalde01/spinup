@@ -144,16 +144,16 @@ code has landed. "Partial" means part of the acceptance criteria is met.
 | F18 | No `--action` selector, shim forces `--start` | **Fixed 2026-09-16** | `--action` everywhere; `--start` is the marker and yields to management flags; explicit start never registers; doctor and the setup card list actions. |
 | F17 | Validation not strict: unknown keys dropped, cycles pass, blank commands pass, wrong pane indexes in errors | **Fixed 2026-09-16** | Strict schema, cycle detection at load, real pane paths, graph with real edges, plan with order/cwd/deps/delays. |
 | F09 | Output prefixer ignores `sink.write()` backpressure | **Fixed 2026-09-16** | `LinePrefixer` Transform in a pipe chain; slow-sink regression. |
-| F10 | `dependsOn` is start order, not readiness | Open | See E03. Do not redefine `dependsOn` silently. |
+| F10 | `dependsOn` is start order, not readiness | **Fixed 2026-09-16** | E03 `ready` conditions; `dependsOn` without a condition keeps its meaning; delays no longer serialize unrelated services. |
 | F11 | tmux assumes `base-index 0`, ignores small terminals | **Fixed 2026-09-16** | Ids were already used; session created with terminal size or 200x50; base-index 1 regression; `TmuxError` names the failing split. |
 
 ### 3.3 P1 detection and Compose
 
 | ID | Defect | Status | Remaining work |
 |---|---|---|---|
-| F12 | Detection ignores root scripts, workspace globs, declared package manager; invents `npm start` | Open | Prefer existing config, then project-owned launch (E06), then workspace expansion. Honor `workspaces` globs with `Bun.Glob`/`fs.glob`. Unknown projects ask for a command or fail, never persist a guess. |
-| F13 | Service names collide (`app` node + `app` python, same basenames) | Open | Assign unique names before dependency inference: `app-node`/`app-python`, `apps-api`/`services-api`. Never rename Compose service keys. |
-| F14 | Compose file precedence wrong, static parsing misses overrides/profiles, one `up` per service | Open | `docker compose config --format json` when Compose is available. One `up` per Compose application. Never `down -v` on failure. |
+| F12 | Detection ignores root scripts, workspace globs, declared package manager; invents `npm start` | **Fixed 2026-09-16** | Launchers, root orchestrator, declared globs with exclusions, `packageManager` field, no test/check scripts, verified Python entries, prompt or fail when nothing is found. |
+| F13 | Service names collide (`app` node + `app` python, same basenames) | **Fixed 2026-09-16** | Unique by runtime or path before inference; Compose keys untouched because Compose is one service. |
+| F14 | Compose file precedence wrong, static parsing misses overrides/profiles, one `up` per service | **Fixed 2026-09-16** | `docker compose config` with labelled static fallback, override and profiles honored, one `docker compose up`. Nothing runs `down`. |
 
 ### 3.4 Distribution and docs
 
@@ -198,9 +198,9 @@ acceptance check. Items marked "P##" map to review proposals.
 
 | ID | Feature | Depends on | Acceptance |
 |---|---|---|---|
-| E03 | **Readiness conditions** (P03, F10): `waitFor: { port: 5432 }`, `{ http: "http://localhost:3000/health" }`, `{ exit: 0 }`, `{ log: "ready" }`, each with `timeout` | F17 | Postgres → migrate (exit 0) → api (port) → web sequence starts in order and fails fast with the failing condition named. `dependsOn` alone keeps current start-order meaning. |
-| E07 | **`--status`, `--attach`, `--stop`, `--restart [service]`** on owned sessions only (P02) | F02 | Unowned session never touched. `--restart api` restarts one pane and reports dependents that may need restart. |
-| E08 | **Run local config without registering**: `spinup --start` in a directory with `.spinup.yml` (P09) | F02 | No registry or shim writes. tmux session named from config `name` with ownership tags. |
+| E03 ✓ | **Readiness conditions** (P03, F10): `waitFor: { port: 5432 }`, `{ http: "http://localhost:3000/health" }`, `{ exit: 0 }`, `{ log: "ready" }`, each with `timeout` | F17 | Postgres → migrate (exit 0) → api (port) → web sequence starts in order and fails fast with the failing condition named. `dependsOn` alone keeps current start-order meaning. |
+| E07 ✓ | **`--status`, `--attach`, `--stop`, `--restart [service]`** on owned sessions only (P02) | F02 | Unowned session never touched. `--restart api` restarts one pane and reports dependents that may need restart. |
+| E08 ✓ | **Run local config without registering**: `spinup --start` in a directory with `.spinup.yml` (P09) | F02 | No registry or shim writes. tmux session named from config `name` with ownership tags. |
 | E09 | **Opt-in per-service logs** `--logs` via tmux `pipe-pane` and simple-mode tee (P11) | E07 | Files under `$XDG_STATE_HOME/spinup/logs/<alias>/<service>.log`, `0600`, bounded retention, never replaces an existing user pipe. |
 | E10 | **Port preflight** (P07) | E02 | `--check` reports ports declared in config or Compose that are already bound, with owning PID when readable. Never kills. |
 
@@ -208,8 +208,8 @@ acceptance check. Items marked "P##" map to review proposals.
 
 | ID | Feature | Depends on | Acceptance |
 |---|---|---|---|
-| E06 | **Recognize project-owned launchers** (P10): `bin/dev`, `Makefile`/`justfile`/`Taskfile.yml`/`mise.toml` `dev` task, `Procfile`, root `dev` script | F12 | Offered before workspace expansion. Never both a root orchestrator and its children. Nothing executed during scan. |
-| E11 | **Detection explanations** (P04): every generated command carries `# from: apps/api/package.json scripts.dev` as a YAML comment | F12 | `--doctor` shows origin per service. |
+| E06 ✓ | **Recognize project-owned launchers** (P10): `bin/dev`, `Makefile`/`justfile`/`Taskfile.yml`/`mise.toml` `dev` task, `Procfile`, root `dev` script | F12 | Offered before workspace expansion. Never both a root orchestrator and its children. Nothing executed during scan. |
+| E11 ✓ | **Detection explanations** (P04): every generated command carries `# from: apps/api/package.json scripts.dev` as a YAML comment | F12 | `--doctor` shows origin per service. |
 | E15 | **Runtime managers**: respect `.tool-versions`, `mise.toml`, `.nvmrc`, `.python-version`, `uv.lock`, Poetry, venv (P06) | F16 | `--check` reports the version the project declares vs. the one on PATH. No auto-install. |
 | E16 | **More stacks**: Go (`go run ./cmd/...` only when a `main` package is found), Rust (`cargo run` only for bin targets), Java/Kotlin (Gradle/Maven `bootRun`), Ruby (`bin/rails s`, `Procfile.dev`), PHP (`artisan serve`), Deno, Bun | E06, F13 | One fixture per stack in `test/fixtures/`. A library-only repo produces no runnable guess. |
 
@@ -273,7 +273,7 @@ and the current mismatch is visible to every user.
 |---|---|---|
 | **M1: safety + brand** (current branch) | **Done 2026-09-16** except native macOS runs. Closed F19, F05, F06, F02, F03, F08. Landed B01–B07, W01–W13, N02, N04, N08. Tests typecheck via `tsconfig.test.json`. | G01–G06, G08. All tests green on Linux CI. Website builds with zero `runit` strings outside the migration notes. |
 | **M2: contract** | **Done 2026-09-16.** F17, F18, F09, F11, F15 tmux env, F16 remainder. E01, E02, E04, E05, E14, N01, N03, N05. | G07 met: `test/cli.test.ts` drives the real CLI for `--json`, `--action`, exit codes 1/2/42, `--dry-run`, shim routing. |
-| **M3: lifecycle + detection** | E03, E07, E08, F12, F13, F14, E06, E11, F10 resolution. | G09. Fixture matrix in `test/fixtures/`. Readiness sequence integration test on a private tmux socket. |
+| **M3: lifecycle + detection** | **Done 2026-09-16.** E03, E07, E08, F12, F13, F14, E06, E11, F10. Procfile (production) deliberately ignored; only `Procfile.dev`. | G09 met: `test/scan-generate.test.ts` fixture matrix, `test/readiness.test.ts`, readiness and lifecycle on private tmux servers in `test/tmux-workspace.test.ts` and `test/lifecycle.test.ts`. |
 | **M4: distribution** | F21, F22, E12, E22, E23, E25, E26, B08/B09 repo rename. | G10. Native macOS smoke results attached to the release. |
 | **M5: product** | E09, E10, E13, E15–E21, E24, E27, W14–W21. | Each item ships behind its own acceptance test. |
 

@@ -9,6 +9,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Readiness conditions. A service can declare `ready: { port }`, `{ http }`,
+  `{ log }` or `{ exit: 0 }` with a timeout, and its dependents wait until it holds.
+  A failing or timed-out condition stops the run and names the condition; in tmux
+  the session is kept for inspection. `--plan` and `--graph` show conditions.
+- `--status`, `--attach`, `--stop` and `--restart [service]` for tmux workspaces.
+  They act only on the session spinup created for that project and action.
+  `--restart <service>` respawns one pane from the current config, waits for its
+  readiness condition and names its dependents. `--status` supports `--json` and
+  exits 3 when the session is not running.
+- Project commands work without an alias inside a project directory.
+  `spinup --start` runs the directory's config as it is, without registering it,
+  installing a command or generating anything.
+- Detection recognizes commands the project defines for development: `bin/dev`,
+  `Procfile.dev`, and `dev` in `justfile`, `Makefile`, `Taskfile.yml` and
+  `mise.toml`.
+- Each generated service carries a comment saying where its command came from.
+  Scanning prints it, and `--doctor` shows a fresh scan's origins and notes.
+- Python services are detected in workspace members as well as the root, and run
+  through `uv run`, `poetry run` or a local venv when the project uses one.
+
 - `--action <name>` selects a generated action for launching, `--plan`, `--graph`,
   `--env`, `--check` and `--doctor`. Inspection uses exactly the action a launch
   would; an unknown name fails before anything happens and lists the alternatives.
@@ -37,6 +57,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before replacing the file.
 
 ### Changed
+
+- Detection prefers a project's own launcher, then a monorepo's root `dev` script,
+  and only then launches workspace members one by one. Declared workspace globs
+  and `!` exclusions are honored anywhere in the repository, and the
+  `packageManager` field wins over lockfiles, with conflicts reported.
+- `test` and `check` scripts are no longer chosen as development servers, a
+  library's `index.js` is not treated as a server, and an empty or library-only
+  project is no longer registered with an invented `npm start`. Without a detected
+  command, registration asks for one in a terminal and fails elsewhere.
+- Python entrypoints are confirmed by finding the app object in source instead of
+  guessed from dependency names. Without a venv or tool, `python3` is used.
+- Compose is one `docker compose up` service named `compose`, resolved by
+  `docker compose config` when available. It used to be one process per container
+  from a statically parsed file.
+- Colliding service names are made unique by runtime or path before dependencies
+  are inferred.
+- Required tools are inferred from the first word of the selected action's
+  commands. `uv run`, `poetry run` and venv commands no longer require a system
+  Python, and Bun commands no longer require Node.
+- Services start concurrently as soon as their own dependencies are ready. A
+  `delay` now holds back only that service's dependents, not every later service.
 
 - The CLI exits with the failed task's own status, 130 after a handled Ctrl+C and
   143 after a handled SIGTERM. Every failure used to exit 1. `--check` and
@@ -105,6 +146,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original mode is preserved, intermediate files are private, and a symlinked
   config has its target replaced rather than the link becoming a regular file.
 - `spinup --help | head` no longer prints an EPIPE stack trace.
+- Compose files were chosen in the wrong order: with both `compose.yaml` and
+  `docker-compose.yml` present, spinup described a different application than
+  Compose runs. Override files and profiles are now respected.
+- A Node and a Python app at the root, or two workspaces with the same directory
+  name, produced duplicate service names and a config that failed validation.
+- A long value on the setup card, such as a shim path outside the home directory,
+  ran past the card's border.
 - Output forwarding in `simple` mode honors backpressure: a slow consumer stalls
   the task instead of the parent queueing its whole output in memory.
 - A detached tmux session was created at 80x24, where a few splits already failed

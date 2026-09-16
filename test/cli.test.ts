@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { execa } from "execa";
 
+import { wrapText } from "../src/commands/run.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 // Drives the real CLI in a child process against an isolated registry, shim
@@ -191,5 +192,14 @@ describe("cli routing and contract", () => {
     expect(result.stdout).not.toContain("hunter2");
     const report = JSON.parse(String(result.stdout)) as { keys: unknown[] };
     expect(report.keys).toEqual([{ key: "SECRET_TOKEN", origin: ".env", shadowedByShell: false }]);
+  });
+});
+
+describe("setup card", () => {
+  test("a long value without separators wraps inside the card", () => {
+    const lines = wrapText("/very/long/path/".repeat(8), 47);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.every((line) => line.length <= 47)).toBe(true);
+    expect(lines.join("")).toBe("/very/long/path/".repeat(8));
   });
 });
