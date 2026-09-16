@@ -86,7 +86,7 @@ jobs:
           bin="${GITHUB_WORKSPACE}/dist/spinup"
           root="$(mktemp -d)"
           mkdir -p "${root}/caller" "${root}/project" "${root}/home"
-          echo "RUNIT_LEAK_CANARY=leaked" > "${root}/caller/.env"
+          echo "SPINUP_LEAK_CANARY=leaked" > "${root}/caller/.env"
           cat > "${root}/project/.spinup.yml" <<'CONFIG'
           name: canary
           root: .
@@ -97,7 +97,7 @@ jobs:
               tasks:
                 - name: probe
                   cwd: .
-                  cmd: sh -c 'echo CANARY_VALUE=[$RUNIT_LEAK_CANARY]'
+                  cmd: sh -c 'echo CANARY_VALUE=[$SPINUP_LEAK_CANARY]'
           CONFIG
           export HOME="${root}/home"
           (cd "${root}/project" && "${bin}" canary > /dev/null)

@@ -4,7 +4,7 @@ import { CONFIG_FILENAME, configExists, formatConfigError, getConfigPath, loadCo
 import { validateConfigPaths } from "../core/health.ts";
 import { promptForConfigEdits } from "../core/interactive.ts";
 import { getProject } from "../core/registry.ts";
-import type { RunitConfig } from "../types/config.ts";
+import type { SpinupConfig } from "../types/config.ts";
 
 type EditProjectOptions = {
   interactive?: boolean;
@@ -62,7 +62,7 @@ export async function editProject(alias: string, options: EditProjectOptions = {
 
     // Validate what the user wrote, but never write it back. Reserializing a valid
     // file stripped comments and reflowed inline collections even on a no-op edit.
-    let config: RunitConfig;
+    let config: SpinupConfig;
 
     try {
       config = await loadConfig(projectRoot);

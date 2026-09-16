@@ -86,7 +86,7 @@ export async function sessionExists(sessionName: string): Promise<boolean> {
 
 /**
  * Creates the session and reports the ids tmux assigned. Targeting by id rather
- * than by "name:0.0" keeps runit correct under base-index/pane-base-index, which
+ * than by "name:0.0" keeps spinup correct under base-index/pane-base-index, which
  * many users set to 1.
  */
 export async function createSession(sessionName: string): Promise<CreatedSession> {

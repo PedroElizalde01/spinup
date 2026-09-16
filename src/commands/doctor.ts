@@ -7,7 +7,7 @@ import { loadEnv } from "../core/env.ts";
 import { checkTools, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
 import { getProject } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
-import type { Action, RunitConfig } from "../types/config.ts";
+import type { Action, SpinupConfig } from "../types/config.ts";
 
 function requireRegisteredProjectMessage(alias: string): string {
   return `Project alias "${alias}" not registered`;
@@ -47,7 +47,7 @@ function printBanner(title: string): void {
   console.log(`+${line}+\n`);
 }
 
-export function printExecutionPlanFromConfig(config: RunitConfig): void {
+export function printExecutionPlanFromConfig(config: SpinupConfig): void {
   printBanner("Execution Plan");
   const action = config.actions[config.default];
   console.log(`Mode: ${action.mode}\n`);
@@ -71,7 +71,7 @@ export function printExecutionPlanFromConfig(config: RunitConfig): void {
   }
 }
 
-function getDefaultActionItems(config: RunitConfig) {
+function getDefaultActionItems(config: SpinupConfig) {
   const action = config.actions[config.default];
   return action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
 }

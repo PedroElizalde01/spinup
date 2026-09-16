@@ -4,7 +4,7 @@ import path from "node:path";
 import { execa } from "execa";
 
 import type { ProjectDetection } from "./detectors/types.ts";
-import type { Action, Pane, RunitConfig, Task } from "../types/config.ts";
+import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
 
 export type ToolCheck = {
   name: string;
@@ -44,7 +44,7 @@ function getActionEntries(action: Action): Array<Task | Pane> {
   return action.mode === "tmux" ? action.windows.flatMap((window) => window.panes) : action.tasks ?? [];
 }
 
-function getConfigEntries(config: RunitConfig, actionName?: string): Array<Task | Pane> {
+function getConfigEntries(config: SpinupConfig, actionName?: string): Array<Task | Pane> {
   if (actionName) {
     const action = config.actions[actionName];
     return action ? getActionEntries(action) : [];
@@ -59,7 +59,7 @@ function getConfigEntries(config: RunitConfig, actionName?: string): Array<Task 
   });
 }
 
-function getActionTaskPaths(config: RunitConfig, actionName?: string): Array<{ name: string; cwd: string }> {
+function getActionTaskPaths(config: SpinupConfig, actionName?: string): Array<{ name: string; cwd: string }> {
   return getConfigEntries(config, actionName).map((entry) => ({
     name: entry.name,
     cwd: entry.cwd,
@@ -148,7 +148,7 @@ export async function checkTools(names: string[]): Promise<ToolCheck[]> {
  * the file demanded tmux for a project whose selected action is `simple`.
  */
 export function inferRequiredTools(
-  config: RunitConfig,
+  config: SpinupConfig,
   detection: ProjectDetection,
   actionName?: string,
 ): string[] {
@@ -202,7 +202,7 @@ export function inferRequiredTools(
 
 export async function validateConfigPaths(
   projectRoot: string,
-  config: RunitConfig,
+  config: SpinupConfig,
   actionName?: string,
 ): Promise<string[]> {
   const warnings: string[] = [];

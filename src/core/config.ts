@@ -5,7 +5,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z, ZodError } from "zod";
 
-import type { Pane, RunitConfig, Task, Window } from "../types/config.ts";
+import type { Pane, SpinupConfig, Task, Window } from "../types/config.ts";
 
 const taskSchema: z.ZodType<Task> = z.object({
   name: z.string().min(1),
@@ -128,13 +128,13 @@ export function formatConfigError(error: unknown): string {
   return `Config validation failed\n${String(error)}`;
 }
 
-export function parseConfig(raw: string): RunitConfig {
+export function parseConfig(raw: string): SpinupConfig {
   const parsed = YAML.parse(raw) as unknown;
-  return configSchema.parse(parsed) as RunitConfig;
+  return configSchema.parse(parsed) as SpinupConfig;
 }
 
-export function stringifyConfig(config: RunitConfig): string {
-  const parsed = configSchema.parse(config) as RunitConfig;
+export function stringifyConfig(config: SpinupConfig): string {
+  const parsed = configSchema.parse(config) as SpinupConfig;
   return YAML.stringify(parsed);
 }
 
@@ -169,7 +169,7 @@ export async function configExists(projectRoot: string): Promise<boolean> {
   }
 }
 
-export async function loadConfig(projectRoot: string): Promise<RunitConfig> {
+export async function loadConfig(projectRoot: string): Promise<SpinupConfig> {
   const configPath = getConfigPath(projectRoot);
   const raw = await readFile(configPath, "utf8");
   return parseConfig(raw);
@@ -197,7 +197,7 @@ async function writePrivate(target: string, contents: string): Promise<void> {
  * gave it the umask default, so saving an existing 0600 config that carries task
  * secrets silently republished it as 0644.
  */
-export async function saveConfig(projectRoot: string, config: RunitConfig): Promise<void> {
+export async function saveConfig(projectRoot: string, config: SpinupConfig): Promise<void> {
   const configPath = getConfigPath(projectRoot);
   // Serialize first, so a validation failure cannot touch the existing file.
   const contents = stringifyConfig(config);

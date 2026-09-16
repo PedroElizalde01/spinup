@@ -1,4 +1,4 @@
-name: runit
+name: spinup
 root: .
 default: dev
 actions:

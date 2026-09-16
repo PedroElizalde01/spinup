@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { checkTool, inferRequiredTools, validateConfigPaths } from "../src/core/health.ts";
 import type { ProjectDetection } from "../src/core/detectors/types.ts";
-import type { RunitConfig } from "../src/types/config.ts";
+import type { SpinupConfig } from "../src/types/config.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 const tempDirs: string[] = [];
@@ -23,7 +23,7 @@ const emptyDetection: ProjectDetection = {
   fallbackUsed: false,
 };
 
-const mixedConfig: RunitConfig = {
+const mixedConfig: SpinupConfig = {
   name: "health",
   root: ".",
   default: "simple-only",
@@ -65,8 +65,8 @@ describe("tool probing", () => {
 });
 
 describe("config path validation", () => {
-  async function projectWith(cwd: string): Promise<{ root: string; config: RunitConfig }> {
-    const root = await makeTempDir("runit-health-");
+  async function projectWith(cwd: string): Promise<{ root: string; config: SpinupConfig }> {
+    const root = await makeTempDir("spinup-health-");
     tempDirs.push(root);
 
     return {

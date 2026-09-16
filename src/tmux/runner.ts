@@ -13,14 +13,14 @@ import {
   killSessionQuietly,
   sessionExists,
 } from "./session.ts";
-import type { Pane, RunitConfig, TmuxAction } from "../types/config.ts";
+import type { Pane, SpinupConfig, TmuxAction } from "../types/config.ts";
 
 type PlacedPane = {
   pane: Pane;
   paneId: string;
 };
 
-function resolvePaneCwd(projectRoot: string, config: RunitConfig, cwd: string): string {
+function resolvePaneCwd(projectRoot: string, config: SpinupConfig, cwd: string): string {
   const actionRoot = path.resolve(projectRoot, config.root);
   return path.resolve(actionRoot, cwd);
 }
@@ -71,7 +71,7 @@ async function buildWorkspace(
 
 async function startPanes(
   projectRoot: string,
-  config: RunitConfig,
+  config: SpinupConfig,
   placed: PlacedPane[],
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
@@ -93,7 +93,7 @@ async function startPanes(
 
 export async function launchTmuxWorkspace(
   projectRoot: string,
-  config: RunitConfig,
+  config: SpinupConfig,
   action: TmuxAction,
   sessionName: string,
   environment: NodeJS.ProcessEnv,

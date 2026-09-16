@@ -1,6 +1,6 @@
 import { confirm, input, select } from "@inquirer/prompts";
 
-import type { Action, Pane, RunitConfig, Task, Window } from "../types/config.ts";
+import type { Action, Pane, SpinupConfig, Task, Window } from "../types/config.ts";
 
 /**
  * Carries the original task/pane so fields the prompts never touch -- env, delay,
@@ -128,7 +128,7 @@ export async function confirmAction(message: string, defaultValue = false): Prom
   });
 }
 
-export async function promptForConfigEdits(config: RunitConfig): Promise<RunitConfig | null> {
+export async function promptForConfigEdits(config: SpinupConfig): Promise<SpinupConfig | null> {
   const defaultActionName = config.default;
   const defaultAction = config.actions[defaultActionName];
 

@@ -12,7 +12,8 @@ import { confirmAction } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
 import { createShim, getShimPath } from "../core/shim.ts";
-import type { Action, Pane, RunitConfig, Task } from "../types/config.ts";
+import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
+import { GLYPH } from "../ui/brand.ts";
 
 type RunProjectOptions = {
   regenerate?: boolean;
@@ -123,7 +124,7 @@ function collectServices(action: Action): Map<string, ServiceShape> {
  * commands of two services produced an empty result, so a real change was reported
  * as "no changes" and never applied.
  */
-export function formatProposedChanges(current: RunitConfig, next: RunitConfig): string[] {
+export function formatProposedChanges(current: SpinupConfig, next: SpinupConfig): string[] {
   const changes: string[] = [];
   const actionNames = [...new Set([...Object.keys(current.actions), ...Object.keys(next.actions)])].sort();
 
@@ -228,7 +229,7 @@ async function bootstrapProject(
   }
 
   // Create the shim first. It is the step that can legitimately refuse -- a name
-  // collision or a file runit does not own -- and registering beforehand would
+  // collision or a file spinup does not own -- and registering beforehand would
   // leave a successful-looking entry with no runnable command behind it.
   await createShim(alias);
   await registerProject(alias, projectRoot);
@@ -377,7 +378,7 @@ function summarizeAction(actionName: string, action: Action): Array<[string, str
 function printSetupCard(
   alias: string,
   projectRoot: string,
-  config: RunitConfig,
+  config: SpinupConfig,
   detection: ReturnType<typeof detectProject>,
   status: "registered" | "already registered",
 ): void {
@@ -386,8 +387,8 @@ function printSetupCard(
   const statusColor = status === "registered" ? ANSI.green : ANSI.yellow;
   const rows = [
     border("top"),
-    line(colorize("  █▀█ █ █ █▄ █ █ ▀█▀", ANSI.bold, ANSI.cyan)),
-    line(colorize("  █▀▄ █▄█ █ ▀█ █  █", ANSI.bold, ANSI.cyan)),
+    line(colorize(`  ${GLYPH[0]}`, ANSI.bold, ANSI.cyan)),
+    line(colorize(`  ${GLYPH[1]}`, ANSI.bold, ANSI.cyan)),
     line(),
     ...field("alias", colorize(alias, ANSI.bold, ANSI.white)),
     ...field("status", colorize(status, ANSI.bold, statusColor)),

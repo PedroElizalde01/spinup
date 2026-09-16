@@ -34,7 +34,7 @@ export type TmuxAction = {
 
 export type Action = SimpleAction | TmuxAction;
 
-export type RunitConfig = {
+export type SpinupConfig = {
   name: string;
   root: string;
   default: string;

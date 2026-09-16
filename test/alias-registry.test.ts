@@ -19,7 +19,7 @@ const originalConfigHome = process.env.XDG_CONFIG_HOME;
 const originalShimDir = process.env.SPINUP_SHIM_DIR;
 
 async function isolate(): Promise<{ configHome: string; shimDir: string }> {
-  const root = await makeTempDir("runit-registry-");
+  const root = await makeTempDir("spinup-registry-");
   tempDirs.push(root);
 
   const configHome = path.join(root, "config");
@@ -66,7 +66,7 @@ describe("alias validation", () => {
 
   test("normalizes case so one project cannot occupy two entries", async () => {
     await isolate();
-    const root = await makeTempDir("runit-project-");
+    const root = await makeTempDir("spinup-project-");
     tempDirs.push(root);
 
     expect(validateAlias("MyApp")).toBe("myapp");
@@ -86,7 +86,7 @@ describe("alias validation", () => {
 });
 
 describe("shim ownership", () => {
-  test("refuses to overwrite a file runit did not create", async () => {
+  test("refuses to overwrite a file spinup did not create", async () => {
     const { shimDir } = await isolate();
     const victim = path.join(shimDir, "precious");
     await writeFile(victim, "#!/bin/sh\necho PRECIOUS\n", "utf8");
@@ -127,7 +127,7 @@ describe("shim ownership", () => {
 describe("registry durability", () => {
   test("concurrent registrations do not lose entries", async () => {
     await isolate();
-    const root = await makeTempDir("runit-concurrent-");
+    const root = await makeTempDir("spinup-concurrent-");
     tempDirs.push(root);
 
     const aliases = Array.from({ length: 20 }, (_, index) => `concurrent${index}`);
@@ -138,7 +138,7 @@ describe("registry durability", () => {
 
   test("removal is durable and leaves other entries intact", async () => {
     await isolate();
-    const root = await makeTempDir("runit-remove-");
+    const root = await makeTempDir("spinup-remove-");
     tempDirs.push(root);
 
     await registerProject("keep", root);
@@ -150,7 +150,7 @@ describe("registry durability", () => {
 
   test("honors XDG_CONFIG_HOME and ignores a relative override", async () => {
     const { configHome } = await isolate();
-    const root = await makeTempDir("runit-xdg-");
+    const root = await makeTempDir("spinup-xdg-");
     tempDirs.push(root);
 
     await registerProject("xdgtest", root);
@@ -239,7 +239,7 @@ describe("shim safety against non-regular destinations", () => {
   // the wrapper was created at the link's target, outside the shim directory.
   test("refuses a dangling symlink instead of writing through it", async () => {
     const { shimDir } = await isolate();
-    const outside = await makeTempDir("runit-outside-");
+    const outside = await makeTempDir("spinup-outside-");
     tempDirs.push(outside);
     const victimPath = path.join(outside, "VICTIM");
 
@@ -251,7 +251,7 @@ describe("shim safety against non-regular destinations", () => {
 
   test("refuses a symlink that points at a real file", async () => {
     const { shimDir } = await isolate();
-    const outside = await makeTempDir("runit-outside2-");
+    const outside = await makeTempDir("spinup-outside2-");
     tempDirs.push(outside);
     const targetPath = path.join(outside, "real");
     await writeFile(targetPath, "ORIGINAL", "utf8");

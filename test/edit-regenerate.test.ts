@@ -3,7 +3,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { formatProposedChanges } from "../src/commands/run.ts";
 import { parseConfig } from "../src/core/config.ts";
 import { promptForConfigEdits } from "../src/core/interactive.ts";
-import type { RunitConfig } from "../src/types/config.ts";
+import type { SpinupConfig } from "../src/types/config.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 const tempDirs: string[] = [];
@@ -75,7 +75,7 @@ mock.module("@inquirer/prompts", () => ({
   confirm: async () => true,
 }));
 
-async function withPromptAnswers(answers: Array<string | number>, config: RunitConfig): Promise<RunitConfig | null> {
+async function withPromptAnswers(answers: Array<string | number>, config: SpinupConfig): Promise<SpinupConfig | null> {
   promptQueue.splice(0, promptQueue.length, ...answers);
   return promptForConfigEdits(config);
 }
@@ -99,7 +99,7 @@ describe("regeneration change preview", () => {
     ].join("\n"),
   );
 
-  function withTasks(commands: Record<string, string>): RunitConfig {
+  function withTasks(commands: Record<string, string>): SpinupConfig {
     const clone = structuredClone(base);
     const action = clone.actions.dev!;
     if (action.mode !== "simple") throw new Error("expected simple action");

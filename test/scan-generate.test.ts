@@ -13,7 +13,7 @@ afterEach(async () => {
 
 describe("scan -> detect -> generate", () => {
   test("generates mixed docker + node tmux config with dependencies", async () => {
-    const projectRoot = await makeTempDir("runit-mixed-");
+    const projectRoot = await makeTempDir("spinup-mixed-");
     tempDirs.push(projectRoot);
 
     await writeProjectFile(

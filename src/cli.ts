@@ -12,6 +12,7 @@ import { removeRegisteredProject } from "./commands/remove.ts";
 import { runProject } from "./commands/run.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
 import { createShim, needsShimRefresh, reclaimLegacyShim } from "./core/shim.ts";
+import { banner } from "./ui/brand.ts";
 
 /**
  * Aliases registered before the format was enforced would otherwise report as
@@ -90,6 +91,7 @@ program
   // Unrecognized arguments were silently discarded, so shim-forwarded flags looked
   // like they worked. Fail loudly until a passthrough contract exists.
   .allowExcessArguments(false)
+  .addHelpText("beforeAll", banner)
   .argument("[alias]", "registered project alias")
   .addOption(new Option("--start", "start the registered project").hideHelp())
   .option("--check", "validate required tools for a registered project")
@@ -127,6 +129,12 @@ program
     }
 
     if (!alias) {
+      if (activeFlags === 0 && !options.interactive && !options.regenerate) {
+        // Bare `spinup` is a request for orientation, not an error.
+        program.outputHelp();
+        return;
+      }
+
       throw new Error("An alias is required unless --list is used.");
     }
 

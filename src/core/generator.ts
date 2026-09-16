@@ -1,6 +1,6 @@
 import { detectProject } from "./detector.ts";
 import type { ScanResult } from "./scanner.ts";
-import type { Action, RunitConfig, Task, Window } from "../types/config.ts";
+import type { Action, SpinupConfig, Task, Window } from "../types/config.ts";
 
 function resolveServicesLayout(serviceCount: number): string {
   if (serviceCount === 2) {
@@ -28,7 +28,7 @@ function buildTmuxAction(windows: Window[]): Action {
   };
 }
 
-export function generateConfig(scanResult: ScanResult, projectName: string): RunitConfig {
+export function generateConfig(scanResult: ScanResult, projectName: string): SpinupConfig {
   const detection = detectProject(scanResult);
   const actions: Record<string, Action> = {};
 

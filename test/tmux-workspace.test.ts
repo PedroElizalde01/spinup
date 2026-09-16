@@ -6,7 +6,7 @@ import path from "node:path";
 import { execa } from "execa";
 
 import { launchTmuxWorkspace } from "../src/tmux/runner.ts";
-import type { RunitConfig, TmuxAction } from "../src/types/config.ts";
+import type { SpinupConfig, TmuxAction } from "../src/types/config.ts";
 
 // Every test drives a private tmux server via TMUX_TMPDIR, so a developer's real
 // sessions are never touched. The directory lives directly under the system temp
@@ -63,7 +63,7 @@ async function isolateTmux(): Promise<string> {
   return projectRoot;
 }
 
-function config(action: TmuxAction): RunitConfig {
+function config(action: TmuxAction): SpinupConfig {
   return { name: "tmuxtest", root: ".", default: "dev", actions: { dev: action } };
 }
 
@@ -106,7 +106,7 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
             {
               name: "probe",
               cwd: ".",
-              cmd: `sh -c 'echo "GOT:[$RUNIT_TEST_SECRET]"; sleep 30'`,
+              cmd: `sh -c 'echo "GOT:[$SPINUP_TEST_SECRET]"; sleep 30'`,
             },
           ],
         },
@@ -114,7 +114,7 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
     };
 
     await launchTmuxWorkspace(projectRoot, config(action), action, "envtest", {
-      RUNIT_TEST_SECRET: "top-secret-value",
+      SPINUP_TEST_SECRET: "top-secret-value",
     });
 
     await Bun.sleep(1200);
@@ -126,7 +126,7 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
     // The process received it...
     expect(pane).toContain("GOT:[top-secret-value]");
     // ...but the assignment itself was never typed into a shell.
-    expect(pane).not.toContain("RUNIT_TEST_SECRET=");
+    expect(pane).not.toContain("SPINUP_TEST_SECRET=");
     expect(pane).not.toContain("export ");
   }, 30_000);
 

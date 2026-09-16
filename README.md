@@ -16,10 +16,10 @@ Project environment launcher CLI
 `spinup` registers project aliases, generates a `.spinup.yml`, and launches your dev
 environment from anywhere.
 
-> **Renamed from `spinup`.** The old name collides with the UNIX service supervisor of
+> **Renamed from `runit`.** The old name collides with the UNIX service supervisor of
 > the same name on apt, Homebrew and npm. Existing installs migrate themselves on the
 > next run: the registry moves to `~/.config/spinup`, generated commands are rewritten,
-> and a project's existing `.spinup.yml` keeps being used as-is.
+> and a project's existing `.runit.yml` keeps being used as-is.
 
 ## Platform support
 

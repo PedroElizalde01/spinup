@@ -16,7 +16,7 @@ export function expandHome(inputPath: string): string {
 /**
  * The XDG spec requires absolute paths and says a relative value must be ignored,
  * so a stray relative override falls back to the default rather than resolving
- * against whatever directory runit happened to be invoked from.
+ * against whatever directory spinup happened to be invoked from.
  */
 function resolveOverride(value: string | undefined, fallback: string): string {
   return value && path.isAbsolute(value) ? value : fallback;

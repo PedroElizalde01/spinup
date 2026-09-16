@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { executeAction, TaskFailure } from "../src/core/executor.ts";
-import type { RunitConfig, Task } from "../src/types/config.ts";
+import type { SpinupConfig, Task } from "../src/types/config.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 const tempDirs: string[] = [];
@@ -10,7 +10,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => cleanupTempDir(dir)));
 });
 
-function simpleConfig(tasks: Task[]): RunitConfig {
+function simpleConfig(tasks: Task[]): SpinupConfig {
   return {
     name: "executor-test",
     root: ".",
@@ -20,7 +20,7 @@ function simpleConfig(tasks: Task[]): RunitConfig {
 }
 
 async function runTasks(tasks: Task[]): Promise<{ output: string; error?: unknown }> {
-  const projectRoot = await makeTempDir("runit-exec-");
+  const projectRoot = await makeTempDir("spinup-exec-");
   tempDirs.push(projectRoot);
 
   const chunks: string[] = [];
@@ -61,7 +61,7 @@ describe("simple-mode execution", () => {
 
   test("honors an inline environment assignment", async () => {
     const { output, error } = await runTasks([
-      { name: "inline", cwd: ".", cmd: "RUNIT_INLINE=ok printenv RUNIT_INLINE" },
+      { name: "inline", cwd: ".", cmd: "SPINUP_INLINE=ok printenv SPINUP_INLINE" },
     ]);
 
     expect(error).toBeUndefined();

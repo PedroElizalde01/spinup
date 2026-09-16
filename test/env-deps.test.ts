@@ -12,7 +12,7 @@ afterEach(async () => {
 
 describe("environment and dependency resolution", () => {
   test("applies env files in order, later files winning", async () => {
-    const projectRoot = await makeTempDir("runit-env-");
+    const projectRoot = await makeTempDir("spinup-env-");
     tempDirs.push(projectRoot);
 
     await writeProjectFile(projectRoot, ".env", "DATABASE_URL=base\n");
@@ -29,7 +29,7 @@ describe("environment and dependency resolution", () => {
   });
 
   test("reads .env.<action> for the action's own name, not a fixed mode", async () => {
-    const projectRoot = await makeTempDir("runit-env-mode-");
+    const projectRoot = await makeTempDir("spinup-env-mode-");
     tempDirs.push(projectRoot);
 
     await writeProjectFile(projectRoot, ".env", "BASE=yes\n");
@@ -46,7 +46,7 @@ describe("environment and dependency resolution", () => {
   });
 
   test("an inherited shell value wins over a file value", async () => {
-    const projectRoot = await makeTempDir("runit-env-shell-");
+    const projectRoot = await makeTempDir("spinup-env-shell-");
     tempDirs.push(projectRoot);
 
     await writeProjectFile(projectRoot, ".env", "TOKEN=from-file\nONLY_FILE=yes\n");
@@ -60,16 +60,16 @@ describe("environment and dependency resolution", () => {
   });
 
   test("does not mutate the surrounding process environment", async () => {
-    const projectRoot = await makeTempDir("runit-env-pure-");
+    const projectRoot = await makeTempDir("spinup-env-pure-");
     tempDirs.push(projectRoot);
 
-    await writeProjectFile(projectRoot, ".env", "RUNIT_PURITY_PROBE=should-not-leak\n");
-    delete process.env.RUNIT_PURITY_PROBE;
+    await writeProjectFile(projectRoot, ".env", "SPINUP_PURITY_PROBE=should-not-leak\n");
+    delete process.env.SPINUP_PURITY_PROBE;
 
     await loadEnv(projectRoot, "dev", { shellEnv: {} });
 
     // Inspecting the environment must not change how a later command runs.
-    expect(process.env.RUNIT_PURITY_PROBE).toBeUndefined();
+    expect(process.env.SPINUP_PURITY_PROBE).toBeUndefined();
   });
 
   test("builds dependency order and graph output", () => {

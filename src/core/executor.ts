@@ -6,7 +6,7 @@ import { execa, type ResultPromise } from "execa";
 
 import { buildDependencyGraph } from "./dependencies.ts";
 import { launchTmuxWorkspace } from "../tmux/runner.ts";
-import type { RunitConfig, SimpleAction, Task } from "../types/config.ts";
+import type { SpinupConfig, SimpleAction, Task } from "../types/config.ts";
 
 type ExecuteActionOptions = {
   environment?: NodeJS.ProcessEnv;
@@ -66,7 +66,7 @@ function pipePrefixedOutput(stream: Readable | undefined, prefix: string, sink: 
   });
 }
 
-function resolveTaskCwd(projectRoot: string, config: RunitConfig, task: Task): string {
+function resolveTaskCwd(projectRoot: string, config: SpinupConfig, task: Task): string {
   const actionRoot = path.resolve(projectRoot, config.root);
   return path.resolve(actionRoot, task.cwd);
 }
@@ -184,7 +184,7 @@ async function terminateAll(running: ResultPromise[], detached: boolean): Promis
 
 async function runSimpleAction(
   projectRoot: string,
-  config: RunitConfig,
+  config: SpinupConfig,
   action: SimpleAction,
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
@@ -288,7 +288,7 @@ async function runSimpleAction(
 
 export async function executeAction(
   projectRoot: string,
-  config: RunitConfig,
+  config: SpinupConfig,
   actionName = config.default,
   options: ExecuteActionOptions = {},
 ): Promise<void> {

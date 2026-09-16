@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { getConfigPath, loadConfig, saveConfig } from "../src/core/config.ts";
 import { sanitizeLegacyAlias } from "../src/core/registry.ts";
-import type { RunitConfig } from "../src/types/config.ts";
+import type { SpinupConfig } from "../src/types/config.ts";
 import { cleanupTempDir, makeTempDir } from "./helpers.ts";
 
 const tempDirs: string[] = [];
@@ -13,7 +13,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => cleanupTempDir(dir)));
 });
 
-const config: RunitConfig = {
+const config: SpinupConfig = {
   name: "perm",
   root: ".",
   default: "dev",
@@ -23,7 +23,7 @@ const config: RunitConfig = {
 };
 
 async function projectWithConfig(mode: number): Promise<string> {
-  const root = await makeTempDir("runit-perm-");
+  const root = await makeTempDir("spinup-perm-");
   tempDirs.push(root);
 
   const configPath = path.join(root, ".spinup.yml");
@@ -62,7 +62,7 @@ describe("config replacement preserves permissions", () => {
   });
 
   test("replaces what a symlinked config points at, keeping the link", async () => {
-    const root = await makeTempDir("runit-perm-link-");
+    const root = await makeTempDir("spinup-perm-link-");
     tempDirs.push(root);
     const real = path.join(root, "real.yml");
     await writeFile(real, "name: perm\nroot: .\ndefault: dev\nactions: {}\n", "utf8");
@@ -83,7 +83,7 @@ describe("config replacement preserves permissions", () => {
 
     // default points at an action that does not exist, so serialization rejects it.
     await expect(
-      saveConfig(root, { name: "x", root: ".", default: "missing", actions: {} } as RunitConfig),
+      saveConfig(root, { name: "x", root: ".", default: "missing", actions: {} } as SpinupConfig),
     ).rejects.toThrow();
 
     expect(await readFile(configPath, "utf8")).toBe(before);
