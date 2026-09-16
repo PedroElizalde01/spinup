@@ -5,6 +5,7 @@ import { Transform, type Readable, type Writable } from "node:stream";
 import { execa } from "execa";
 
 import { buildDependencyGraph } from "./dependencies.ts";
+import { scheduleServices, type ServiceView } from "./readiness.ts";
 import { launchTmuxWorkspace } from "../tmux/runner.ts";
 import type { SpinupConfig, SimpleAction, Task } from "../types/config.ts";
 
@@ -77,6 +78,8 @@ class LinePrefixer extends Transform {
     this.pending = lines.pop() ?? "";
 
     for (const line of lines) {
+      // Readiness checks that wait for a log line listen here.
+      this.emit("line", line);
       this.push(`${this.prefix}${line}\n`);
     }
 
@@ -99,14 +102,16 @@ class LinePrefixer extends Transform {
 }
 
 /** Exported for the backpressure regression; the executor is its only caller. */
-export function pipePrefixedOutput(stream: Readable | undefined, prefix: string, sink: Writable): void {
+export function pipePrefixedOutput(stream: Readable | undefined, prefix: string, sink: Writable): LinePrefixer | undefined {
   if (!stream) {
-    return;
+    return undefined;
   }
 
   stream.setEncoding("utf8");
+  const prefixer = new LinePrefixer(prefix);
   // end:false, the sink is the parent's stdout/stderr and outlives every task.
-  stream.pipe(new LinePrefixer(prefix)).pipe(sink, { end: false });
+  stream.pipe(prefixer).pipe(sink, { end: false });
+  return prefixer;
 }
 
 function resolveTaskCwd(projectRoot: string, config: SpinupConfig, task: Task): string {
@@ -246,13 +251,13 @@ async function runSimpleAction(
   const single = tasks.length === 1;
   const groups: OwnedGroup[] = [];
   const waits: Promise<unknown>[] = [];
-  let firstFailure: TaskFailure | undefined;
+  let firstFailure: Error | undefined;
 
   // One owner for shutdown: whoever asks first starts it, everyone awaits the same run.
   let shutdown: Promise<void> | undefined;
   const stopEverything = (): Promise<void> => (shutdown ??= terminateGroups(groups));
 
-  const failFast = (failure: TaskFailure) => {
+  const failFast = (failure: Error) => {
     firstFailure ??= failure;
 
     if (!abortController.signal.aborted) {
@@ -264,69 +269,94 @@ async function runSimpleAction(
   // ones would still block on the survivors of a failed startup.
   abortController.signal.addEventListener("abort", () => void stopEverything(), { once: true });
 
-  console.log("[deps] resolving dependencies");
+  const startTask = async (task: Task): Promise<ServiceView> => {
+    const prefix = `[${task.name}] `;
+    const cwd = resolveTaskCwd(projectRoot, config, task);
+    console.log(`${prefix}starting ${task.cmd}`);
 
-  try {
-    for (const task of tasks) {
-      if (abortController.signal.aborted) {
-        break;
+    // The command is a shell program, not an argv list. Prefixing it with "exec"
+    // replaced the shell at the first word, so "a && b" ran only "a" and inline
+    // assignments such as "FOO=bar cmd" were treated as a program name.
+    const subprocess = execa(task.cmd, {
+      cwd,
+      env: {
+        ...environment,
+        ...task.env,
+      },
+      shell: true,
+      // The environment given here is the whole environment; nothing is merged in.
+      extendEnv: false,
+      buffer: false,
+      // Own process group, so shutdown reaches the shell's descendants too.
+      detached: true,
+      stdin: single ? "pipe" : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      cleanup: true,
+      forceKillAfterDelay: TERMINATION_GRACE_MS,
+    });
+
+    if (subprocess.pid !== undefined) {
+      groups.push({ name: task.name, pgid: subprocess.pid });
+    }
+
+    if (single && subprocess.stdin) {
+      // pipe() applies backpressure; a detached child cannot inherit the terminal.
+      process.stdin.pipe(subprocess.stdin);
+      waits.push(subprocess.finally(() => process.stdin.unpipe(subprocess.stdin!)).catch(() => undefined));
+    }
+
+    const outputs = [
+      pipePrefixedOutput(subprocess.stdout, prefix, process.stdout),
+      pipePrefixedOutput(subprocess.stderr, prefix, process.stderr),
+    ];
+
+    // Attached before any output can arrive, so a readiness line is never missed.
+    const pattern = task.ready && "log" in task.ready ? new RegExp(task.ready.log) : undefined;
+    let matched = false;
+
+    if (pattern) {
+      for (const output of outputs) {
+        output?.on("line", (line: string) => {
+          matched ||= pattern.test(line);
+        });
       }
+    }
 
-      const prefix = `[${task.name}] `;
-      const cwd = resolveTaskCwd(projectRoot, config, task);
-      console.log(`${prefix}starting ${task.cmd}`);
+    let status: number | undefined;
 
-      // The command is a shell program, not an argv list. Prefixing it with "exec"
-      // replaced the shell at the first word, so "a && b" ran only "a" and inline
-      // assignments such as "FOO=bar cmd" were treated as a program name.
-      const subprocess = execa(task.cmd, {
-        cwd,
-        env: {
-          ...environment,
-          ...task.env,
+    waits.push(
+      subprocess.then(
+        (result) => {
+          status = result.exitCode ?? 0;
         },
-        shell: true,
-        // The environment given here is the whole environment; nothing is merged in.
-        extendEnv: false,
-        buffer: false,
-        // Own process group, so shutdown reaches the shell's descendants too.
-        detached: true,
-        stdin: single ? "pipe" : "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        cleanup: true,
-        forceKillAfterDelay: TERMINATION_GRACE_MS,
-      });
+        (error: unknown) => {
+          status = getExitCode(error);
 
-      if (subprocess.pid !== undefined) {
-        groups.push({ name: task.name, pgid: subprocess.pid });
-      }
-
-      if (single && subprocess.stdin) {
-        // pipe() applies backpressure; a detached child cannot inherit the terminal.
-        process.stdin.pipe(subprocess.stdin);
-        waits.push(subprocess.finally(() => process.stdin.unpipe(subprocess.stdin!)).catch(() => undefined));
-      }
-
-      pipePrefixedOutput(subprocess.stdout, prefix, process.stdout);
-      pipePrefixedOutput(subprocess.stderr, prefix, process.stderr);
-
-      waits.push(
-        subprocess.catch((error: unknown) => {
           if (isCanceledError(error) || abortController.signal.aborted) {
             return;
           }
 
-          failFast(new TaskFailure(task.name, task.cmd, getExitCode(error), error));
-        }),
-      );
+          failFast(new TaskFailure(task.name, task.cmd, status, error));
+        },
+      ),
+    );
 
-      if (task.delay) {
-        try {
-          await delay(task.delay, undefined, { signal: abortController.signal });
-        } catch {
-          // Aborted while waiting; the loop guard stops the remaining tasks.
-        }
+    return {
+      exitStatus: async () => status,
+      outputMatches: async () => matched,
+    };
+  };
+
+  console.log("[deps] resolving dependencies");
+
+  try {
+    try {
+      await scheduleServices(tasks, startTask, abortController);
+    } catch (error) {
+      // A readiness failure is a run failure; an abort caused by a signal is not.
+      if (!signalReceived()) {
+        failFast(error instanceof Error ? error : new Error(String(error)));
       }
     }
 

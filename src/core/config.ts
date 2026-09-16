@@ -23,6 +23,30 @@ const envSchema = z.record(
   z.string(),
 );
 
+const timeoutSchema = z.number().int().positive().optional();
+
+const readySchema = z.union([
+  z.object({ port: z.number().int().min(1).max(65535), host: nonblank.optional(), timeout: timeoutSchema }).strict(),
+  z.object({ http: z.string().url(), timeout: timeoutSchema }).strict(),
+  z
+    .object({
+      log: nonblank.refine(
+        (pattern) => {
+          try {
+            new RegExp(pattern);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { message: "is not a valid regular expression" },
+      ),
+      timeout: timeoutSchema,
+    })
+    .strict(),
+  z.object({ exit: z.literal(0), timeout: timeoutSchema }).strict(),
+]);
+
 // Unknown keys are rejected: a misspelled `dependson` used to disappear silently and
 // the service simply started out of order.
 const runnableSchema = z
@@ -33,6 +57,7 @@ const runnableSchema = z
     dependsOn: z.array(nonblank).optional(),
     delay: z.number().int().nonnegative().optional(),
     env: envSchema.optional(),
+    ready: readySchema.optional(),
   })
   .strict();
 
@@ -213,7 +238,7 @@ export function stringifyConfig(config: SpinupConfig, comments: Record<string, s
 }
 
 type Runnable = Task | Pane;
-const RUNNABLE_FIELDS = ["name", "cwd", "cmd", "dependsOn", "delay", "env"] as const;
+const RUNNABLE_FIELDS = ["name", "cwd", "cmd", "dependsOn", "delay", "env", "ready"] as const;
 
 function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);

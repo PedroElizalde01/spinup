@@ -1,3 +1,4 @@
+import { describeReady } from "./readiness.ts";
 import type { Pane, Task } from "../types/config.ts";
 
 type Runnable = Task | Pane;
@@ -61,7 +62,8 @@ export function visualizeDependencyGraph<T extends Runnable>(items: T[]): string
   return buildDependencyGraph(items)
     .map((item) => {
       const dependencies = unique(item.dependsOn ?? []);
-      return dependencies.length > 0 ? `${item.name} depends on ${dependencies.join(", ")}` : item.name;
+      const line = dependencies.length > 0 ? `${item.name} depends on ${dependencies.join(", ")}` : item.name;
+      return item.ready ? `${line}  (ready when ${describeReady(item.ready)})` : line;
     })
     .join("\n");
 }

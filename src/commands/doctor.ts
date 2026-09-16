@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildDependencyGraph, visualizeDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
+import { describeReady } from "../core/readiness.ts";
 import { getConfigPath } from "../core/config.ts";
 import { checkTools, inferRequiredTools, validateConfigPaths } from "../core/health.ts";
 import { scanProject } from "../core/scanner.ts";
@@ -20,6 +21,8 @@ export type PlanStep = {
   cmd: string;
   dependsOn: string[];
   delay: number;
+  /** When dependents may start, e.g. "port localhost:5432"; null means once started. */
+  ready: string | null;
 };
 
 export type ExecutionPlan = {
@@ -66,6 +69,7 @@ export function buildExecutionPlan(projectRoot: string, config: SpinupConfig, ac
     cmd: item.cmd,
     dependsOn: item.dependsOn ?? [],
     delay: item.delay ?? 0,
+    ready: item.ready ? describeReady(item.ready) : null,
   }));
 
   const plan: ExecutionPlan = { action: actionName, mode: action.mode, root, order };
@@ -88,8 +92,9 @@ export function renderExecutionPlan(plan: ExecutionPlan): void {
 
   for (const [index, step] of plan.order.entries()) {
     const after = step.dependsOn.length > 0 ? `  after ${step.dependsOn.join(", ")}` : "";
+    const ready = step.ready ? `  ready when ${step.ready}` : "";
     const delay = step.delay > 0 ? `  then wait ${step.delay}ms` : "";
-    console.log(`  ${index + 1}. ${step.name}${after}${delay}`);
+    console.log(`  ${index + 1}. ${step.name}${after}${ready}${delay}`);
     console.log(`     cwd ${step.cwd}`);
     console.log(`     ${step.cmd}`);
   }
@@ -120,7 +125,11 @@ export async function previewProjectGraph(alias: string, options: InspectOptions
   const entries = actionEntries(action);
   const report = {
     action: actionName,
-    services: buildDependencyGraph(entries).map((item) => ({ name: item.name, dependsOn: item.dependsOn ?? [] })),
+    services: buildDependencyGraph(entries).map((item) => ({
+      name: item.name,
+      dependsOn: item.dependsOn ?? [],
+      ready: item.ready ? describeReady(item.ready) : null,
+    })),
   };
 
   emit(report, () => {

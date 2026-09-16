@@ -1,9 +1,9 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 
 import { buildDependencyGraph } from "../core/dependencies.ts";
-import { addPane, applyWindowLayout, renameWindow, respawnPane } from "./layout.ts";
+import { ReadinessFailure, scheduleServices } from "../core/readiness.ts";
+import { addPane, applyWindowLayout, keepPaneOnExit, paneView, renameWindow, respawnPane } from "./layout.ts";
 import {
   attachSession,
   createSession,
@@ -81,23 +81,30 @@ async function startPanes(
   const paneIds = new Map(placed.map(({ pane, paneId }) => [pane.name, paneId]));
   const ordered = buildDependencyGraph(placed.map(({ pane }) => pane));
 
-  for (const pane of ordered) {
-    const env: NodeJS.ProcessEnv = { ...environment, ...pane.env };
+  await scheduleServices(
+    ordered,
+    async (pane) => {
+      const paneId = paneIds.get(pane.name)!;
+      const env: NodeJS.ProcessEnv = { ...environment, ...pane.env };
 
-    for (const key of TMUX_OWNED_KEYS) {
-      delete env[key];
-    }
+      for (const key of TMUX_OWNED_KEYS) {
+        delete env[key];
+      }
 
-    await respawnPane(paneIds.get(pane.name)!, {
-      cwd: resolvePaneCwd(projectRoot, config, pane.cwd),
-      env,
-      cmd: pane.cmd,
-    });
+      if (pane.ready && "exit" in pane.ready) {
+        await keepPaneOnExit(paneId);
+      }
 
-    if (pane.delay) {
-      await delay(pane.delay);
-    }
-  }
+      await respawnPane(paneId, {
+        cwd: resolvePaneCwd(projectRoot, config, pane.cwd),
+        env,
+        cmd: pane.cmd,
+      });
+
+      return paneView(paneId);
+    },
+    new AbortController(),
+  );
 }
 
 /**
@@ -160,6 +167,14 @@ export async function launchTmuxWorkspace(
     console.log("[deps] resolving dependencies");
     await startPanes(projectRoot, config, placed, environment);
   } catch (error) {
+    if (error instanceof ReadinessFailure) {
+      // The services are up and their output explains the failure; keep them to look at.
+      error.message +=
+        `\nThe tmux session "${sessionName}" is still running so you can inspect it: tmux attach -t =${sessionName}` +
+        `\nEnd it with: tmux kill-session -t =${sessionName}`;
+      throw error;
+    }
+
     // Never leave a half-built workspace behind; remove only the session we made.
     await killSessionQuietly(sessionId);
     throw error;

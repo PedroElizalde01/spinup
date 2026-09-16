@@ -1,3 +1,4 @@
+import type { ServiceView } from "../core/readiness.ts";
 import { runTmux } from "./session.ts";
 
 export type PaneSpawn = {
@@ -15,6 +16,33 @@ function toEnvArgs(env: NodeJS.ProcessEnv): string[] {
   return Object.entries(env).flatMap(([key, value]) =>
     value === undefined ? [] : ["-e", `${key}=${value}`],
   );
+}
+
+/**
+ * What readiness checks see of a pane: whether it has exited and with what status,
+ * and its recent output. A pane that no longer exists counts as exited (-1).
+ */
+export function paneView(paneId: string): ServiceView {
+  return {
+    async exitStatus() {
+      try {
+        const [dead, status] = (await runTmux(["display-message", "-p", "-t", paneId, "#{pane_dead} #{pane_dead_status}"])).split(" ");
+        return dead === "1" ? Number(status || -1) : undefined;
+      } catch {
+        return -1;
+      }
+    },
+    async outputMatches(pattern) {
+      // -J joins wrapped lines so a long line matches as the program wrote it.
+      const text = await runTmux(["capture-pane", "-p", "-J", "-t", paneId, "-S", "-2000"]).catch(() => "");
+      return text.split("\n").some((line) => pattern.test(line));
+    },
+  };
+}
+
+/** Keeps a pane that exits on screen with its status, so an `exit` condition can read it. */
+export async function keepPaneOnExit(paneId: string): Promise<void> {
+  await runTmux(["set-option", "-p", "-t", paneId, "remain-on-exit", "on"]);
 }
 
 export async function renameWindow(windowId: string, name: string): Promise<void> {

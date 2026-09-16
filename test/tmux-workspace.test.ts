@@ -309,6 +309,45 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
     expect(recorded).toMatch(/^TMUX_PANE=%\d+$/m);
   }, 30_000);
 
+  test("a pane waits for its dependency's readiness, and a failed condition keeps the session for inspection", async () => {
+    const projectRoot = await isolateTmux();
+    const action: TmuxAction = {
+      mode: "tmux",
+      windows: [
+        {
+          name: "services",
+          panes: [
+            { name: "migrate", cwd: ".", cmd: "sh -c 'sleep 0.5; touch migrated'", ready: { exit: 0 } },
+            { name: "app", cwd: ".", cmd: "sh -c 'test -f migrated && touch app-saw-migration; sleep 30'", dependsOn: ["migrate"] },
+          ],
+        },
+      ],
+    };
+
+    await launchTmuxWorkspace(projectRoot, config(action), action, "ready", {});
+    await Bun.sleep(800);
+    expect(await Bun.file(path.join(projectRoot, "app-saw-migration")).exists()).toBe(true);
+
+    const failing: TmuxAction = {
+      mode: "tmux",
+      windows: [
+        {
+          name: "services",
+          panes: [
+            { name: "migrate", cwd: ".", cmd: "sh -c 'exit 5'", ready: { exit: 0 } },
+            { name: "app", cwd: ".", cmd: "sh -c 'touch should-not-exist; sleep 30'", dependsOn: ["migrate"] },
+          ],
+        },
+      ],
+    };
+
+    await expect(launchTmuxWorkspace(projectRoot, config(failing), failing, "notready", {})).rejects.toThrow(
+      /exit 0 failed: exited with status 5[\s\S]*still running/,
+    );
+    expect(await Bun.file(path.join(projectRoot, "should-not-exist")).exists()).toBe(false);
+    expect(await tmux(["has-session", "-t", "=notready"]).then(() => true, () => false)).toBe(true);
+  }, 30_000);
+
   test("never destroys a session whose name merely shares a prefix", async () => {
     const projectRoot = await isolateTmux();
 
