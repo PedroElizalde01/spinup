@@ -19,7 +19,7 @@ import type { ProjectDetection } from "../core/detectors/types.ts";
 import { generateConfig, generatedComments } from "../core/generator.ts";
 import { confirmAction, promptForCommand } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
-import { scanProject } from "../core/scanner.ts";
+import { directoriesMissingNodeModules, scanProject } from "../core/scanner.ts";
 import { logDirectory } from "../core/logs.ts";
 import { claimedPorts, describeBusyPort, findBusyPorts } from "../core/ports.ts";
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
@@ -728,6 +728,15 @@ export async function launchProject(alias: string, projectRoot: string, options:
     buildDependencyGraph(action.tasks ?? []);
   } else {
     buildDependencyGraph(action.windows.flatMap((window) => window.panes));
+  }
+
+  const actionRoot = path.resolve(projectRoot, config.root);
+  const taskDirs = (action.mode === "simple" ? (action.tasks ?? []) : action.windows.flatMap((window) => window.panes)).map((task) =>
+    path.resolve(actionRoot, task.cwd),
+  );
+
+  for (const directory of await directoriesMissingNodeModules(taskDirs)) {
+    console.log(`[deps] ${path.relative(projectRoot, directory) || "."} has no node_modules; install its dependencies first`);
   }
 
   if (action.mode !== "tmux") {

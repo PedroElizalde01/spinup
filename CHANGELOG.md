@@ -7,6 +7,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Launch warns when a task directory declares dependencies but has no `node_modules`, instead of failing a few lines later with "command not found".
+
 ## [0.5.0] - 2026-09-17
 
 ### Added

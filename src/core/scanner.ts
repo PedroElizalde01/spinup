@@ -528,6 +528,26 @@ async function findLaunchers(projectRoot: string): Promise<LauncherGroup[]> {
 }
 
 /** Reads the project. Nothing is executed except `docker compose config`, which starts nothing. */
+/**
+ * Task directories whose package.json declares dependencies but have no
+ * node_modules. Launching there fails with "command not found" a few lines
+ * later; naming the missing install first saves the guess.
+ */
+export async function directoriesMissingNodeModules(directories: string[]): Promise<string[]> {
+  const missing: string[] = [];
+
+  for (const directory of [...new Set(directories)]) {
+    const manifest = await readPackageJson(path.join(directory, "package.json"));
+    const declared = Object.keys({ ...manifest?.dependencies, ...manifest?.devDependencies }).length > 0;
+
+    if (declared && !(await pathExists(path.join(directory, "node_modules")))) {
+      missing.push(directory);
+    }
+  }
+
+  return missing;
+}
+
 export async function scanProject(projectRoot: string): Promise<ScanResult> {
   const resolvedRoot = path.resolve(projectRoot);
   const root = await scanDirectory(resolvedRoot, ".");

@@ -5,7 +5,7 @@ import path from "node:path";
 import { parseConfig, stringifyConfig } from "../src/core/config.ts";
 import { detectProject } from "../src/core/detector.ts";
 import { generateConfig, generatedComments, NothingToRunError } from "../src/core/generator.ts";
-import { scanProject } from "../src/core/scanner.ts";
+import { directoriesMissingNodeModules, scanProject } from "../src/core/scanner.ts";
 import type { SpinupConfig } from "../src/types/config.ts";
 import { cleanupTempDir, makeTempDir, writeProjectFile } from "./helpers.ts";
 
@@ -365,5 +365,19 @@ describe("more stacks", () => {
 
     const { inferRequiredTools } = await import("../src/core/health.ts");
     expect(inferRequiredTools(config, "dev")).toEqual(expect.arrayContaining(["tmux", "npm", "node", "go", "cargo"]));
+  });
+});
+
+describe("missing node_modules", () => {
+  // The SHIMS monorepo launched into "concurrently: not found" because only the apps were installed.
+  test("directories with declared dependencies but no node_modules are named once", async () => {
+    const root = await fixture({
+      "package.json": json({ name: "mono", devDependencies: { concurrently: "^9" } }),
+      "apps/web/package.json": json({ name: "web", dependencies: { vite: "^6" } }),
+      "apps/web/node_modules/.keep": "",
+      "apps/docs/package.json": json({ name: "docs" }),
+    });
+
+    expect(await directoriesMissingNodeModules([root, root, path.join(root, "apps/web"), path.join(root, "apps/docs")])).toEqual([root]);
   });
 });
