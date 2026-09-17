@@ -1,0 +1,56 @@
+[
+  {
+    "flag": "spinup my-app",
+    "command": "spinup my-app",
+    "description": "Register the project: the setup card, .spinup.yml and a my-app command.",
+    "output": "┌────────────────────────────────────────────────────────────┐\n│  █▀▀ █▀█ █ █▄ █ █ █ █▀█                                    │\n│  ▄▄█ █▀▀ █ █ ▀█ █▄█ █▀▀                                    │\n│                                                            │\n│ alias      my-app                                          │\n│ status     registered                                      │\n│ command    ~/.local/bin/my-app                             │\n│ root       ~/code/my-app                                   │\n├────────────────────────────────────────────────────────────┤\n│ stack      node                                            │\n│ package    npm                                             │\n│ frameworks NestJS, Next.js                                 │\n│ services   api, web                                        │\n├────────────────────────────────────────────────────────────┤\n│ actions    dev (default)                                   │\n│ action     dev                                             │\n│ mode       tmux                                            │\n│ windows    1 (services)                                    │\n│ panes      2 (api, web)                                    │\n│ layout     even-horizontal                                 │\n├────────────────────────────────────────────────────────────┤\n│ next       my-app                                          │\n└────────────────────────────────────────────────────────────┘"
+  },
+  {
+    "flag": "--plan",
+    "command": "my-app --plan",
+    "description": "Start order, directories and readiness.",
+    "output": "+------------------+\n|  Execution Plan  |\n+------------------+\n\nAction: dev (tmux)\nRoot:   ~/code/my-app\n\nStart order:\n  1. api\n     cwd ~/code/my-app/apps/api\n     npm run start:dev\n  2. web  after api\n     cwd ~/code/my-app/apps/web\n     npm run dev\n\nWindows:\n  services (even-horizontal): api, web"
+  },
+  {
+    "flag": "--graph",
+    "command": "my-app --graph",
+    "description": "Which service waits for which.",
+    "output": "+-----------------+\n|  Service Graph  |\n+-----------------+\n\nAction: dev\n\napi\nweb depends on api"
+  },
+  {
+    "flag": "--check",
+    "command": "my-app --check",
+    "description": "Required tools and busy ports. Exits 2 when the action cannot run.",
+    "output": "+--------------------+\n| Environment Check  |\n+--------------------+\n\nAction: dev\n\ntmux ✓\nnpm ✓\nnode ✓\n\nReady."
+  },
+  {
+    "flag": "--doctor",
+    "command": "my-app --doctor",
+    "description": "Config, detection with the origin of each command, tools and notes.",
+    "output": "+------------------+\n|  Project Doctor  |\n+------------------+\n\nProject: my-app\nPath: ~/code/my-app\n\nConfig file:\n  ~/code/my-app/.spinup.yml ✓\n\nActions:\n  dev (default)\n\nInspecting: dev (tmux)\n\nStack detection:\n  node ✓\n  frameworks NestJS, Next.js\n\nA fresh scan would generate:\n  api: npm run start:dev  (apps/api/package.json scripts.start:dev)\n  web: npm run dev  (apps/web/package.json scripts.dev)\n\nServices in this action:\n  api\n  web\n\nPackage manager:\n  npm\n\nTmux: required\n  installed ✓\n\nDocker: not required\n  installed ✓\n\nStatus:\n  ready"
+  },
+  {
+    "flag": "--env",
+    "command": "my-app --env",
+    "description": "Loaded environment files and keys, values masked.",
+    "output": "+---------------+\n|  Environment  |\n+---------------+\n\nAction: dev\nFiles:  .env\n\nLoaded environment variables:\n\nDATABASE_URL=*** [.env]\nPORT=*** [.env]\nSESSION_SECRET=*** [.env]"
+  },
+  {
+    "flag": "--dry-run",
+    "command": "my-app --dry-run",
+    "description": "Everything a launch resolves, nothing started.",
+    "output": "Action: dev (tmux)\nRoot:   ~/code/my-app\n\nStart order:\n  1. api\n     cwd ~/code/my-app/apps/api\n     npm run start:dev\n  2. web  after api\n     cwd ~/code/my-app/apps/web\n     npm run dev\n\nWindows:\n  services (even-horizontal): api, web\n\nEnvironment:\n  files: .env\n  DATABASE_URL [.env]\n  PORT [.env]\n  SESSION_SECRET [.env]\n\ntmux session: my-app\n\n[dry-run] nothing was started"
+  },
+  {
+    "flag": "--list",
+    "command": "spinup --list",
+    "description": "Every registered project.",
+    "output": "Registered projects:\n\nmy-app  dev (tmux)  ~/code/my-app"
+  },
+  {
+    "flag": "--help",
+    "command": "spinup --help",
+    "description": "Every option.",
+    "output": "█▀▀ █▀█ █ █▄ █ █ █ █▀█   v0.5.0\n▄▄█ █▀▀ █ █ ▀█ █▄█ █▀▀   spin up any project from anywhere\n\nUsage: spinup [options] [alias]\n\nRun registered project environments from anywhere.\n\nArguments:\n  alias                 registered project alias; without one, the project in\n                        the current directory\n\nOptions:\n  -v, --version         output the version number\n  -a, --action <name>   act on this action instead of the default\n  --check               validate required tools for a registered project\n  --doctor              inspect a registered project\n  --env                 show loaded environment variables\n  --edit                edit the project config\n  --graph               show service dependency graph\n  --interactive         use interactive prompts with --edit\n  --plan                preview the execution plan\n  --dry-run             with --start: resolve everything and start nothing\n  --logs                when launching: also write each service's output to a\n                        private log file\n  --json                print inspection results as JSON\n  --no-color            disable colored output\n  -r, --regenerate      re-scan the project and overwrite the project config\n  --remove              remove a registered project and its shim\n  --list                list registered projects\n  --path <dir>          register or relink this directory instead of the\n                        current one\n  --init                register a project step by step: review detected\n                        commands and preview before writing\n  --relink              point a registered alias at the current directory, or\n                        at --path\n  -y, --yes             answer yes to confirmations, for scripts\n  --status              show whether the tmux session is running and each\n                        service's state\n  --attach              attach to the running tmux session\n  --stop                end the tmux session\n  --restart [service]   restart one service in the tmux session, or the whole\n                        session\n  --update [version]    replace this binary with the latest release, or a named\n                        version, after verifying it\n  --completion <shell>  print a shell completion script (choices: \"bash\",\n                        \"zsh\", \"fish\")\n  -h, --help            display help for command"
+  }
+]

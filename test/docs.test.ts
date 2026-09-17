@@ -52,3 +52,12 @@ describe("website hero", () => {
     expect(await Bun.file(new URL("../site/hero-card.json", import.meta.url)).text()).toBe(await renderHeroCard());
   });
 });
+
+describe("website flag demos", () => {
+  test("site/flag-outputs.json holds one non-empty output per demo, in order", async () => {
+    const { FLAG_DEMOS } = await import("../scripts/site-flag-outputs.ts");
+    const outputs = JSON.parse(await Bun.file(new URL("../site/flag-outputs.json", import.meta.url)).text()) as Array<{ flag: string; output: string }>;
+    expect(outputs.map((entry) => entry.flag)).toEqual(FLAG_DEMOS.map((demo) => demo.flag));
+    expect(outputs.every((entry) => entry.output.trim().length > 0)).toBe(true);
+  });
+});
