@@ -36,6 +36,17 @@ my-app
 From any directory. A project with one service runs in the foreground with
 prefixed output; with several, in a tmux workspace that you are attached to.
 
+## Change what runs
+
+`.spinup.yml` is yours to edit. Add services, split a monorepo into one service
+per application, add actions such as a migration, or set readiness conditions.
+See [configuration](configuration.md#writing-it-by-hand), then check the result:
+
+```bash
+my-app --edit        # opens the file in $VISUAL or $EDITOR
+my-app --plan        # confirms the start order
+```
+
 ## Manage a tmux workspace
 
 ```bash

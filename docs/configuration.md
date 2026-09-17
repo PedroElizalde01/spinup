@@ -36,6 +36,54 @@ actions:
         cmd: npx prisma migrate dev
 ```
 
+## Writing it by hand
+
+The generated file is a starting point. Edit it whenever the detected commands
+are not how you want to run the project. Only `--regenerate` replaces it, and
+that keeps the old file as `.spinup.yml.bak`.
+
+The usual reason is a monorepo. Detection prefers the root `dev` script, so a
+repository whose root runs `concurrently` or `turbo dev` becomes a single `app`
+service. To run each application as its own service instead, replace that task
+with one service per application:
+
+```yaml
+version: 1
+name: shop
+root: .
+default: dev
+actions:
+  dev:
+    mode: tmux
+    windows:
+      - name: apps
+        layout: even-horizontal
+        panes:
+          - name: backend
+            cwd: apps/backend
+            cmd: npm run start:dev
+            ready: { port: 3000 }
+          - name: frontend
+            cwd: apps/frontend
+            cmd: npm run dev
+            dependsOn: [backend]
+  migrate:
+    mode: simple
+    tasks:
+      - name: prisma
+        cwd: apps/backend
+        cmd: npm run db:migrate:dev
+```
+
+Each service then has its own pane, log and `--restart` target, and the
+frontend waits for the backend's port. `cwd` is relative to `root`, so an
+application's own `.env` is still read by its tooling from its directory.
+
+After editing, `my-app --plan` shows the start order and `my-app --check`
+validates the file. A mistake is reported by field, for example
+`actions.dev.windows.0.panes.1.cwd`. `my-app --edit` opens the file in
+`$VISUAL` or `$EDITOR`.
+
 ## Top level
 
 | Key | Required | Meaning |

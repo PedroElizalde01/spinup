@@ -11,7 +11,9 @@ a fresh scan.
    `Procfile.dev` (except `release`), or a `dev` recipe, target or task in
    `justfile`, `Makefile`, `Taskfile.yml` or `mise.toml`. It runs alone, because it
    already starts what the project needs. Other launchers found are listed as notes.
-2. **A monorepo's root `dev` script**, which is its orchestrator.
+2. **A monorepo's root `dev` script**, which is its orchestrator. To run each
+   application as its own service instead, edit the generated file; see
+   [configuration](configuration.md#writing-it-by-hand).
 3. **Each project in the repository.** Declared workspaces (`workspaces` in
    `package.json`, `pnpm-workspace.yaml`, with `!` exclusions) or, without a
    declaration, the directories under `apps/`, `services/`, `packages/` and
