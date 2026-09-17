@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -25,6 +25,7 @@ import { claimedPorts, describeBusyPort, findBusyPorts } from "../core/ports.ts"
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
 import { colorEnabled } from "../ui/output.ts";
 import { buildExecutionPlan, renderExecutionPlan } from "./doctor.ts";
+import { canonicalProject } from "../tmux/session.ts";
 import { resolveLaunchEnvironment, selectAction, sessionNameFor } from "./shared.ts";
 import type { Action, Pane, SpinupConfig, Task } from "../types/config.ts";
 import { GLYPH } from "../ui/brand.ts";
@@ -44,7 +45,42 @@ type RunProjectOptions = {
   action?: string;
   dryRun?: boolean;
   logs?: boolean;
+  /** Register or relink this directory instead of the current one. */
+  path?: string;
+  /** Answer yes to confirmations; required for them without a terminal. */
+  yes?: boolean;
 };
+
+/**
+ * Consent for a change that replaces something. --yes gives it up front; without a
+ * terminal and without --yes, there is nobody to ask, so the answer is no.
+ */
+async function consent(question: string, yes: boolean | undefined, refusal: string): Promise<boolean> {
+  if (yes) {
+    return true;
+  }
+
+  if (!process.stdin.isTTY) {
+    throw new Error(`${refusal} Run this in a terminal to confirm, or pass --yes.`);
+  }
+
+  return confirmAction(question, false);
+}
+
+/** An existing directory, resolved; the error names the path as given. */
+export async function resolveDirectory(target: string): Promise<string> {
+  const resolved = path.resolve(target);
+
+  try {
+    if ((await stat(resolved)).isDirectory()) {
+      return resolved;
+    }
+  } catch {
+    // Reported below.
+  }
+
+  throw new Error(`${target} is not a directory.`);
+}
 
 type EnsureProjectReadyResult = {
   projectRoot: string;
@@ -57,6 +93,7 @@ type ScanAndGenerateOptions = {
 
 type BootstrapProjectOptions = {
   quiet?: boolean;
+  yes?: boolean;
 };
 
 const BOX_WIDTH = 62;
@@ -312,7 +349,7 @@ export function formatProposedChanges(current: SpinupConfig, next: SpinupConfig)
  * what changes, says what the preview cannot express, requires an explicit yes,
  * and keeps the previous bytes in a private backup before writing.
  */
-async function regenerateWithPreview(alias: string, projectRoot: string): Promise<void> {
+async function regenerateWithPreview(alias: string, projectRoot: string, yes?: boolean): Promise<void> {
   // Never prompt here: replacing a working config with a typed-in guess is not a regeneration.
   const { detection, config: nextConfig, comments } = await detectAndGenerate(alias, projectRoot, false);
   const configPath = getConfigPath(projectRoot);
@@ -344,12 +381,7 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
   console.log(`[config] regenerating replaces ${path.basename(configPath)} entirely.`);
   console.log("[config] custom actions, comments and formatting not listed above are lost.\n");
 
-  if (!process.stdin.isTTY) {
-    // Fail closed: no prompt means no consent.
-    throw new Error("Regenerating replaces the project config and needs confirmation. Run this in a terminal.");
-  }
-
-  if (!(await confirmAction("Replace the config?", false))) {
+  if (!(await consent("Replace the config?", yes, "Regenerating replaces the project config and needs confirmation."))) {
     console.log("[config] regeneration cancelled");
     return;
   }
@@ -372,17 +404,20 @@ async function regenerateWithPreview(alias: string, projectRoot: string): Promis
 export async function bootstrapProject(
   alias: string,
   projectRoot: string,
-  configMode: "keep" | "generate" | "regenerate",
+  configMode: "keep" | "generate" | "regenerate" | { config: SpinupConfig; comments: Record<string, string> },
   options: BootstrapProjectOptions = {},
 ): Promise<void> {
   const outcome = await createShim(alias);
 
   try {
-    if (configMode === "generate") {
+    if (typeof configMode === "object") {
+      // Already reviewed by the user, as with --init.
+      await saveConfig(projectRoot, configMode.config, configMode.comments);
+    } else if (configMode === "generate") {
       await scanAndGenerate(alias, projectRoot, { quiet: options.quiet });
     } else if (configMode === "regenerate") {
       // An unregistered project with a config gets the same preview and consent.
-      await regenerateWithPreview(alias, projectRoot);
+      await regenerateWithPreview(alias, projectRoot, options.yes);
     }
 
     await registerProject(alias, projectRoot);
@@ -397,7 +432,16 @@ export async function bootstrapProject(
 
 async function ensureProjectReady(alias: string, options: RunProjectOptions): Promise<EnsureProjectReadyResult> {
   const registeredProjectRoot = await getProject(validateAlias(alias));
-  const projectRoot = registeredProjectRoot ? path.resolve(registeredProjectRoot) : process.cwd();
+  const requested = options.path ? await resolveDirectory(options.path) : undefined;
+
+  if (registeredProjectRoot && requested && (await canonicalProject(requested)) !== (await canonicalProject(registeredProjectRoot))) {
+    throw new Error(
+      `"${alias}" is already registered for ${registeredProjectRoot}.\n` +
+        `To point it at ${requested}, run: spinup ${alias} --relink --path ${requested}`,
+    );
+  }
+
+  const projectRoot = registeredProjectRoot ? path.resolve(registeredProjectRoot) : (requested ?? process.cwd());
   const hasConfig = await configExists(projectRoot);
 
   if (!registeredProjectRoot && options.start) {
@@ -408,7 +452,7 @@ async function ensureProjectReady(alias: string, options: RunProjectOptions): Pr
 
   if (!registeredProjectRoot) {
     const configMode = !hasConfig ? "generate" : options.regenerate ? "regenerate" : "keep";
-    await bootstrapProject(alias, projectRoot, configMode, { quiet: true });
+    await bootstrapProject(alias, projectRoot, configMode, { quiet: true, yes: options.yes });
     return {
       projectRoot,
       bootstrapped: true,
@@ -416,7 +460,7 @@ async function ensureProjectReady(alias: string, options: RunProjectOptions): Pr
   }
 
   if (options.regenerate && hasConfig) {
-    await regenerateWithPreview(alias, projectRoot);
+    await regenerateWithPreview(alias, projectRoot, options.yes);
   } else if (options.regenerate || !hasConfig) {
     await scanAndGenerate(alias, projectRoot);
   }
@@ -555,6 +599,11 @@ function summarizeAction(actionName: string, action: Action): Array<[string, str
   ];
 }
 
+/** The card `spinup <alias>` prints after registering, for flows that register another way. */
+export async function printRegistered(alias: string, projectRoot: string): Promise<void> {
+  printSetupCard(alias, projectRoot, await loadConfig(projectRoot), detectProject(await scanProject(projectRoot)), "registered");
+}
+
 function printSetupCard(
   alias: string,
   projectRoot: string,
@@ -677,4 +726,51 @@ export async function runProject(alias: string, options: RunProjectOptions = {})
   }
 
   printSetupCard(alias, projectRoot, config, detection, "already registered");
+
+  // Running `spinup alias` from a moved checkout or another worktree otherwise
+  // looks like success while the alias still launches the old directory.
+  const here = await canonicalProject(process.cwd());
+
+  if (!options.path && here !== (await canonicalProject(projectRoot)) && (await configExists(process.cwd()))) {
+    console.error(`\n"${alias}" still points at ${projectRoot}. To use this directory instead: spinup ${alias} --relink`);
+  }
+}
+
+/**
+ * Points a registered alias at another directory: a moved checkout or a worktree.
+ * The generated command is kept, since it names only the alias. A session already
+ * running from the old directory belongs to that directory and is left alone.
+ */
+export async function relinkProject(alias: string, options: RunProjectOptions = {}): Promise<void> {
+  const current = await getProject(validateAlias(alias));
+
+  if (!current) {
+    throw new Error(`"${alias}" is not registered. Register it with: spinup ${alias}${options.path ? ` --path ${options.path}` : ""}`);
+  }
+
+  const target = await resolveDirectory(options.path ?? process.cwd());
+
+  if ((await canonicalProject(target)) === (await canonicalProject(current))) {
+    console.log(`"${alias}" already points at ${target}.`);
+    return;
+  }
+
+  console.log(`"${alias}": ${current}\n     -> ${target}`);
+
+  if (!(await consent(`Point "${alias}" at ${target}?`, options.yes, `Relinking "${alias}" replaces where it points.`))) {
+    console.log("Relink cancelled; nothing was changed.");
+    return;
+  }
+
+  if (!(await configExists(target))) {
+    await scanAndGenerate(alias, target);
+  }
+
+  // The new directory's config must load before the alias depends on it.
+  await loadConfig(target);
+  await createShim(alias);
+  await registerProject(alias, target);
+
+  console.log(`Relinked "${alias}" to ${target}.`);
+  console.log(`A session already running from ${current} is not affected; end it with: tmux kill-session -t =${alias}`);
 }

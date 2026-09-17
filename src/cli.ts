@@ -9,7 +9,8 @@ import { doctorProject, previewProjectEnv, previewProjectGraph, previewProjectPl
 import { editProject } from "./commands/edit.ts";
 import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
-import { launchProject, runProject } from "./commands/run.ts";
+import { initProject } from "./commands/init.ts";
+import { launchProject, relinkProject, runProject } from "./commands/run.ts";
 import { attachProject, restartProject, statusProject, stopProject } from "./commands/session.ts";
 import { actionEntries, loadProject, selectAction } from "./commands/shared.ts";
 import { exitCodeFor, Interrupted } from "./core/executor.ts";
@@ -98,6 +99,10 @@ type CliOptions = {
   completion?: string;
   complete?: string;
   logs?: boolean;
+  path?: string;
+  relink?: boolean;
+  yes?: boolean;
+  init?: boolean;
 };
 
 // `spinup | head` closes the pipe early; that is not an error worth a stack trace.
@@ -143,6 +148,10 @@ program
   .option("-r, --regenerate", "re-scan the project and overwrite the project config")
   .option("--remove", "remove a registered project and its shim")
   .option("--list", "list registered projects")
+  .option("--path <dir>", "register or relink this directory instead of the current one")
+  .option("--init", "register a project step by step: review detected commands and preview before writing")
+  .option("--relink", "point a registered alias at the current directory, or at --path")
+  .option("-y, --yes", "answer yes to confirmations, for scripts")
   .option("--status", "show whether the tmux session is running and each service's state")
   .option("--attach", "attach to the running tmux session")
   .option("--stop", "end the tmux session")
@@ -171,6 +180,8 @@ program
       update: options.update,
       completion: options.completion,
       complete: options.complete,
+      relink: options.relink,
+      init: options.init,
     };
     const active = Object.entries(management)
       .filter(([, enabled]) => enabled)
@@ -203,6 +214,10 @@ program
 
     if (options.interactive && !options.edit) {
       throw new Error("--interactive can only be used with --edit.");
+    }
+
+    if (options.path && primary !== "register" && primary !== "relink" && primary !== "init") {
+      throw new Error("--path applies to registering, --init and --relink.");
     }
 
     if (options.regenerate && primary !== "register" && primary !== "start") {
@@ -285,6 +300,10 @@ program
         return restartProject(alias, typeof options.restart === "string" ? options.restart : undefined, { ...selected, logs: options.logs });
     }
 
+    if (primary === "init") {
+      return initProject(alias, { path: options.path });
+    }
+
     if (!alias && primary === "start") {
       if (options.regenerate) {
         throw new Error("--regenerate needs a registered alias.");
@@ -301,7 +320,7 @@ program
     }
 
     if (!alias) {
-      throw new Error("An alias is required to register, edit or remove a project.");
+      throw new Error("An alias is required to register, relink, edit or remove a project.");
     }
 
     switch (primary) {
@@ -309,6 +328,8 @@ program
         return editProject(alias, { interactive: options.interactive });
       case "remove":
         return removeRegisteredProject(alias);
+      case "relink":
+        return relinkProject(alias, { path: options.path, yes: options.yes });
       default:
         return runProject(alias, {
           regenerate: options.regenerate,
@@ -316,6 +337,8 @@ program
           action: options.action,
           dryRun: options.dryRun,
           logs: options.logs,
+          path: options.path,
+          yes: options.yes,
         });
     }
   });

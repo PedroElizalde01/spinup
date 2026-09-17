@@ -205,3 +205,80 @@ describe("setup card", () => {
     expect(lines.join("")).toBe("/very/long/path/".repeat(8));
   });
 });
+
+describe("--path, --relink and --yes", () => {
+  async function listRoots(): Promise<Record<string, string>> {
+    const rows = JSON.parse(String((await spinup(["--list", "--json"], root)).stdout)) as Array<{ alias: string; root: string }>;
+    return Object.fromEntries(rows.map((row) => [row.alias, row.root]));
+  }
+
+  test("registers a directory given with --path from anywhere", async () => {
+    const result = await spinup(["clitest", "--path", project], root);
+    expect(result.exitCode).toBe(0);
+    expect((await listRoots()).clitest).toBe(project);
+  });
+
+  test("a --path that disagrees with the registration points at --relink", async () => {
+    await register();
+    const other = path.join(root, "other");
+    await mkdir(other);
+
+    const result = await spinup(["clitest", "--path", other], root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`spinup clitest --relink --path ${other}`);
+  });
+
+  test("relinking asks for consent: without a terminal it needs --yes and changes nothing", async () => {
+    await register();
+    const moved = path.join(root, "moved");
+    await mkdir(moved);
+    await writeFile(path.join(moved, ".spinup.yml"), CONFIG);
+
+    const refused = await spinup(["clitest", "--relink"], moved);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("pass --yes");
+    expect((await listRoots()).clitest).toBe(project);
+
+    const relinked = await spinup(["clitest", "--relink", "--yes"], moved);
+    expect(`${relinked.exitCode} ${relinked.stderr}`).toBe("0 ");
+    expect((await listRoots()).clitest).toBe(await realpath(moved));
+    // The command names only the alias, so it keeps working.
+    expect(await Bun.file(path.join(root, "bin", "clitest")).exists()).toBe(true);
+
+    expect((await spinup(["clitest", "--relink", "--yes"], moved)).stdout).toContain("already points at");
+  });
+
+  test("relinking to a directory without a config generates one there", async () => {
+    await register();
+    const worktree = path.join(root, "worktree");
+    await mkdir(worktree);
+    await writeFile(path.join(worktree, "package.json"), JSON.stringify({ scripts: { dev: "vite" } }));
+
+    const result = await spinup(["clitest", "--relink", "--path", worktree, "--yes"], root);
+    expect(`${result.exitCode} ${result.stderr}`).toBe("0 ");
+    expect(await Bun.file(path.join(worktree, ".spinup.yml")).text()).toContain("npm run dev");
+  });
+
+  test("running the alias from another checkout suggests --relink", async () => {
+    await register();
+    const clone = path.join(root, "clone");
+    await mkdir(clone);
+    await writeFile(path.join(clone, ".spinup.yml"), CONFIG);
+
+    const result = await spinup(["clitest"], clone);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("spinup clitest --relink");
+  });
+
+  test("--yes lets a script regenerate without a terminal, keeping a backup", async () => {
+    await register();
+    await writeFile(path.join(project, "package.json"), JSON.stringify({ scripts: { dev: "vite" } }));
+
+    const refused = await spinup(["clitest", "--regenerate"]);
+    expect(refused.exitCode).toBe(1);
+
+    const accepted = await spinup(["clitest", "--regenerate", "--yes"]);
+    expect(`${accepted.exitCode} ${accepted.stderr}`).toBe("0 ");
+    expect(await Bun.file(path.join(project, ".spinup.yml.bak")).text()).toBe(CONFIG);
+  });
+});
