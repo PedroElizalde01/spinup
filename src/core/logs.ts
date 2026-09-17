@@ -83,16 +83,20 @@ export class CappedLog {
   }
 }
 
-const PIPE_BLOCK_BYTES = 64 * 1024;
-
 /**
- * For tmux: the pane's output through dd. head -c would enforce the limit but
- * buffers until its input ends, leaving the log empty while the service runs. dd
- * writes each read as it arrives, and counting reads caps the file at
- * count x block size even when reads are partial. Errors go to /dev/null because
- * BSD dd has no status=none.
+ * For tmux: the pane's output through awk, flushed per line and stopped at the
+ * limit. head -c enforces a limit but buffers until its input ends, and dd did not
+ * stream on macOS. mawk, Debian and Ubuntu's default awk, reads its input in large
+ * blocks unless given -W interactive, which other awks reject; the version probe
+ * reads /dev/null so it can never consume pane output. awk counts characters,
+ * which matches bytes for ASCII output and errs low otherwise.
  */
 export function tmuxPipeCommand(file: string): string {
   const quoted = `'${file.replace(/'/g, `'\\''`)}'`;
-  return `exec dd bs=${PIPE_BLOCK_BYTES} count=${LOG_LIMIT_BYTES / PIPE_BLOCK_BYTES} 2>/dev/null >> ${quoted}`;
+  const program = `'{ written += length($0) + 1; if (written > ${LOG_LIMIT_BYTES}) { print "[spinup] log reached ${LOG_LIMIT_BYTES} bytes; later output was not written"; exit } print; fflush() }'`;
+  return (
+    `if awk -W version </dev/null 2>/dev/null | grep -q mawk; ` +
+    `then exec awk -W interactive ${program} >> ${quoted}; ` +
+    `else exec awk ${program} >> ${quoted}; fi`
+  );
 }

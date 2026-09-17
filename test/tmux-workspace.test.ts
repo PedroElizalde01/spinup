@@ -371,6 +371,18 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
         contents = await Bun.file(log).text();
       }
 
+      if (!contents.includes("PANE_LOGGED")) {
+        // Enough to tell a closed pipe from a filter that never wrote.
+        const paneId = await tmux(["list-panes", "-t", "=logged", "-F", "#{pane_id}"]);
+        const pipe = await tmux(["display-message", "-p", "-t", paneId, "pipe=#{pane_pipe} pid=#{pane_pid}"]);
+        const screen = await tmux(["capture-pane", "-p", "-t", paneId]);
+        const processes = (await execa("ps", ["-A", "-o", "pid,ppid,command"])).stdout
+          .split("\n")
+          .filter((line) => /awk|dd |spinup/.test(line))
+          .join("\n");
+        throw new Error(`log empty; ${pipe}\nscreen:\n${screen}\nprocesses:\n${processes}\nlog exists: ${await Bun.file(log).exists()}`);
+      }
+
       expect(contents).toContain("PANE_LOGGED");
     } finally {
       process.env.XDG_STATE_HOME = saved;
