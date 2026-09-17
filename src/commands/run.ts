@@ -604,6 +604,56 @@ export async function printRegistered(alias: string, projectRoot: string): Promi
   printSetupCard(alias, projectRoot, await loadConfig(projectRoot), detectProject(await scanProject(projectRoot)), "registered");
 }
 
+export type SetupCard = Array<Array<[label: string, value: string]>>;
+
+/**
+ * The card's content, separate from how a terminal draws it. The website renders
+ * the same data (scripts/site-hero-card.ts), so its hero cannot drift from the CLI.
+ */
+export function buildSetupCard(
+  alias: string,
+  projectRoot: string,
+  config: SpinupConfig,
+  detection: ReturnType<typeof detectProject>,
+  status: "registered" | "already registered",
+): SetupCard {
+  return [
+    [
+      ["alias", alias],
+      ["status", status],
+      ["command", compactHome(getShimPath(alias))],
+      ["root", compactHome(projectRoot)],
+    ],
+    [
+      ["stack", detection.stack],
+      ["package", detection.packageManager ?? "unknown"],
+      ["frameworks", formatList(detection.frameworks)],
+      ["services", formatList(detection.services.map((service) => service.name))],
+    ],
+    [
+      ["actions", Object.keys(config.actions).map((name) => (name === config.default ? `${name} (default)` : name)).join(", ")],
+      ...summarizeAction(config.default, config.actions[config.default]!),
+    ],
+    [["next", alias]],
+  ];
+}
+
+function styleValue(label: string, value: string, status: string): string {
+  switch (label) {
+    case "alias":
+    case "stack":
+      return colorize(value, ANSI.bold, ANSI.white);
+    case "status":
+      return colorize(value, ANSI.bold, status === "registered" ? ANSI.green : ANSI.yellow);
+    case "mode":
+      return colorize(value, ANSI.bold, value === "tmux" ? ANSI.cyan : ANSI.white);
+    case "next":
+      return colorize(value, ANSI.bold, ANSI.green);
+    default:
+      return colorize(value, ANSI.white);
+  }
+}
+
 function printSetupCard(
   alias: string,
   projectRoot: string,
@@ -611,30 +661,16 @@ function printSetupCard(
   detection: ReturnType<typeof detectProject>,
   status: "registered" | "already registered",
 ): void {
-  const shimPath = compactHome(getShimPath(alias));
-  const action = config.actions[config.default];
-  const statusColor = status === "registered" ? ANSI.green : ANSI.yellow;
+  const sections = buildSetupCard(alias, projectRoot, config, detection, status);
   const rows = [
     border("top"),
     line(colorize(`  ${GLYPH[0]}`, ANSI.bold, ANSI.cyan)),
     line(colorize(`  ${GLYPH[1]}`, ANSI.bold, ANSI.cyan)),
     line(),
-    ...field("alias", colorize(alias, ANSI.bold, ANSI.white)),
-    ...field("status", colorize(status, ANSI.bold, statusColor)),
-    ...field("command", colorize(shimPath, ANSI.white)),
-    ...field("root", colorize(compactHome(projectRoot), ANSI.white)),
-    border("middle"),
-    ...field("stack", colorize(detection.stack, ANSI.bold, ANSI.white)),
-    ...field("package", colorize(detection.packageManager ?? "unknown", ANSI.white)),
-    ...field("frameworks", colorize(formatList(detection.frameworks), ANSI.white)),
-    ...field("services", colorize(formatList(detection.services.map((service) => service.name)), ANSI.white)),
-    border("middle"),
-    ...field("actions", colorize(Object.keys(config.actions).map((name) => (name === config.default ? `${name} (default)` : name)).join(", "), ANSI.white)),
-    ...summarizeAction(config.default, action).flatMap(([label, value]) =>
-      field(label, colorize(value, label === "mode" ? ANSI.bold : ANSI.white, label === "mode" && value === "tmux" ? ANSI.cyan : ANSI.white)),
-    ),
-    border("middle"),
-    ...field("next", colorize(alias, ANSI.bold, ANSI.green)),
+    ...sections.flatMap((section, index) => [
+      ...(index > 0 ? [border("middle")] : []),
+      ...section.flatMap(([label, value]) => field(label, styleValue(label, value, status))),
+    ]),
     border("bottom"),
   ];
 

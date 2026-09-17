@@ -1,0 +1,83 @@
+{
+  "command": "spinup my-app",
+  "card": [
+    [
+      [
+        "alias",
+        "my-app"
+      ],
+      [
+        "status",
+        "registered"
+      ],
+      [
+        "command",
+        "~/.local/bin/my-app"
+      ],
+      [
+        "root",
+        "~/code/my-app"
+      ]
+    ],
+    [
+      [
+        "stack",
+        "node"
+      ],
+      [
+        "package",
+        "npm"
+      ],
+      [
+        "frameworks",
+        "NestJS, Next.js"
+      ],
+      [
+        "services",
+        "api, web"
+      ]
+    ],
+    [
+      [
+        "actions",
+        "dev (default)"
+      ],
+      [
+        "action",
+        "dev"
+      ],
+      [
+        "mode",
+        "tmux"
+      ],
+      [
+        "windows",
+        "1 (services)"
+      ],
+      [
+        "panes",
+        "2 (api, web)"
+      ],
+      [
+        "layout",
+        "even-horizontal"
+      ]
+    ],
+    [
+      [
+        "next",
+        "my-app"
+      ]
+    ]
+  ],
+  "services": [
+    {
+      "name": "api",
+      "command": "npm run start:dev"
+    },
+    {
+      "name": "web",
+      "command": "npm run dev"
+    }
+  ]
+}

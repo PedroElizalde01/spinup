@@ -1,0 +1,5 @@
+{
+  "name": "api",
+  "dependencies": { "@nestjs/core": "11.0.0" },
+  "scripts": { "start": "nest start", "start:dev": "nest start --watch" }
+}
