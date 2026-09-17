@@ -16,6 +16,10 @@ Project environment launcher CLI
 `spinup` registers project aliases, generates a `.spinup.yml`, and launches your dev
 environment from anywhere.
 
+**Documentation:** [quick start](docs/quick-start.md) · [installation](docs/installation.md) ·
+[configuration](docs/configuration.md) · [commands](docs/commands.md) ·
+[detection](docs/detection.md) · [tmux sessions](docs/sessions.md) · [upgrading](docs/upgrading.md)
+
 > **Renamed from `runit`.** The old name collides with the UNIX service supervisor of
 > the same name on apt, Homebrew and npm. Existing installs migrate themselves on the
 > next run: the registry moves to `~/.config/spinup`, generated commands are rewritten,
@@ -23,11 +27,15 @@ environment from anywhere.
 
 ## Platform support
 
-- Linux x64: supported
-- macOS x64 and arm64: supported
-- Windows: not officially supported yet
+| Platform | Build | Tested in CI |
+|---|---|---|
+| Linux x64 | glibc and musl (Alpine) | test suite and binary smoke test |
+| Linux arm64 | glibc and musl (Alpine) | test suite and binary smoke test |
+| macOS arm64 (Apple Silicon) | native | test suite and binary smoke test |
+| macOS x64 (Intel) | native | test suite and binary smoke test |
 
-For Windows today, use WSL if you want the same Bash and tmux-oriented workflow.
+Every release runs its smoke test on each published file, on the machine it is for.
+On Windows, use WSL.
 
 ## Requirements
 
@@ -91,7 +99,11 @@ Latest release:
 curl -fsSL https://raw.githubusercontent.com/PedroElizalde01/spinup/main/install.sh | bash
 ```
 
-The installer supports Linux and macOS.
+The installer picks the build for your OS, architecture and C library, verifies it
+against the release's `SHA256SUMS`, confirms it runs, and only then replaces an
+existing binary. Update later with `spinup --update`. See
+[installation](docs/installation.md) for verifying provenance, shell completion and
+uninstalling.
 
 Then run:
 
@@ -103,7 +115,7 @@ Install a specific version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/PedroElizalde01/spinup/main/install.sh | \
-  bash -s -- --version v0.4.0
+  bash -s -- --version v0.5.0
 ```
 
 If `spinup` is not found after install, add this to your shell profile:
@@ -118,6 +130,12 @@ Register the current project and create the alias command:
 
 ```bash
 spinup my-app
+```
+
+Or step by step, reviewing every detected command before anything is written:
+
+```bash
+spinup --init
 ```
 
 Then run it with the generated shim:
@@ -205,9 +223,16 @@ spinup --list
 - `spinup <alias> --stop`: end the tmux session
 - `spinup <alias> --restart [service]`: restart one service, or the whole session
 - `spinup --version`: print the installed version
+- `spinup --init`: register step by step, reviewing detected commands and previewing what is written
+- `spinup <alias> --path <dir>`: register a directory other than the current one
+- `spinup <alias> --relink`: point an alias at the current directory, or `--path`, after a move or for a worktree
+- `spinup --update [version]`: replace the binary with a verified release
+- `spinup --completion bash|zsh|fish`: print a shell completion script
 
 Modifiers: `--action <name>` (launch, plan, graph, env, check, doctor, status,
-attach, stop, restart), `--json` (list, plan, graph, env, check, doctor, status), `--dry-run` (launch), `--no-color` or the
+attach, stop, restart), `--logs` (launch, restart a whole session: write each
+service's output to a private log), `-y/--yes` (answer confirmations, for scripts),
+`--json` (list, plan, graph, env, check, doctor, status), `--dry-run` (launch), `--no-color` or the
 `NO_COLOR` environment variable.
 
 ## Exit status
@@ -546,12 +571,25 @@ bun run build
 
 ## Release
 
+Bump `version` in `package.json`, move the CHANGELOG's unreleased notes under the new
+version, then:
+
 ```bash
-git tag v0.3.0
-git push origin main v0.3.0
+git tag -a v0.5.0 -m "v0.5.0"
+git push origin main v0.5.0
 ```
 
-Pushing a `v*` tag triggers GitHub Actions to build release binaries and publish a GitHub Release.
+The release workflow refuses a tag that disagrees with `package.json`, runs the full
+CI, builds every target, runs the smoke test on each file on its own platform, and
+publishes the binaries, `spinup.1`, `SHA256SUMS` and build provenance. With a
+`HOMEBREW_TAP_TOKEN` secret it also updates the `PedroElizalde01/homebrew-spinup` tap.
+
+Generated files are checked by tests; regenerate them after changing their source:
+
+```bash
+bun run scripts/build-schema.ts       # schema/spinup.schema.json from the config schema
+bun run scripts/site-hero-card.ts     # site/hero-card.json from the setup card code
+```
 
 ## Files and environment
 

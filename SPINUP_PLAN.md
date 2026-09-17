@@ -159,9 +159,9 @@ code has landed. "Partial" means part of the acceptance criteria is met.
 
 | ID | Defect | Status | Remaining work |
 |---|---|---|---|
-| F21 | No native macOS/ARM execution in CI, tests not typechecked, mutable action tags | Partial | Add `macos-14` (arm64) and `macos-13` (x64) smoke jobs running the built binary. `tsconfig.test.json` with `bun-types`, `tsc -p` in CI. Pin `upload-artifact`, `download-artifact`, `action-gh-release` to SHAs. |
-| F22 | No checksum verification, non-atomic replace, no libc check, bad option-arg errors | Partial | See E12. |
-| F23 | README rename paragraph wrong, examples incomplete, remediation table stale | Partial | Fix B03. Add working simple, multi-window, and mixed examples exercised by a test. Update remediation ledger in `RUNIT_REVIEW.md` §11 with exact scope. |
+| F21 | No native macOS/ARM execution in CI, tests not typechecked, mutable action tags | **Fixed 2026-09-17** | Add `macos-14` (arm64) and `macos-13` (x64) smoke jobs running the built binary. `tsconfig.test.json` with `bun-types`, `tsc -p` in CI. Pin `upload-artifact`, `download-artifact`, `action-gh-release` to SHAs. |
+| F22 | No checksum verification, non-atomic replace, no libc check, bad option-arg errors | **Fixed 2026-09-17** | Checksums, staged atomic install, musl builds and detection, option validation, version check of the staged binary. |
+| F23 | README rename paragraph wrong, examples incomplete, remediation table stale | **Mostly fixed 2026-09-17** (docs/ with validated examples; RUNIT_REVIEW.md remediation table still historical) | Fix B03. Add working simple, multi-window, and mixed examples exercised by a test. Update remediation ledger in `RUNIT_REVIEW.md` §11 with exact scope. |
 
 ### 3.5 New defects found today (N)
 
@@ -191,7 +191,7 @@ acceptance check. Items marked "P##" map to review proposals.
 | E02 ✓ | **`--json`** on list, plan, graph, env, check, doctor (P05) | N03 | stdout is only JSON, diagnostics on stderr, values masked, exit codes unchanged. Schema documented in `docs/json.md`. |
 | E04 ✓ | **Exit code contract** | F08 | 0 success, 1 usage/config, 2 missing tool, task exit code passthrough, 130/143 for signals. Documented and tested. |
 | E05 ✓ | **`--dry-run`** on start | E01 | Prints resolved commands, cwd, env key origins, tmux layout. Nothing spawned. |
-| E13 | **Shell completion** `spinup completion bash|zsh|fish` (P08) | E01 | Completes aliases from registry and actions from the alias's config. No daemon. |
+| E13 ✓ | **Shell completion** `spinup completion bash|zsh|fish` (P08) | E01 | Completes aliases from registry and actions from the alias's config. No daemon. |
 | E14 ✓ | **`NO_COLOR`, `--no-color`** | N03 | Respected everywhere the card or prefixes are colored. |
 
 ### 4.2 Lifecycle
@@ -201,8 +201,8 @@ acceptance check. Items marked "P##" map to review proposals.
 | E03 ✓ | **Readiness conditions** (P03, F10): `waitFor: { port: 5432 }`, `{ http: "http://localhost:3000/health" }`, `{ exit: 0 }`, `{ log: "ready" }`, each with `timeout` | F17 | Postgres → migrate (exit 0) → api (port) → web sequence starts in order and fails fast with the failing condition named. `dependsOn` alone keeps current start-order meaning. |
 | E07 ✓ | **`--status`, `--attach`, `--stop`, `--restart [service]`** on owned sessions only (P02) | F02 | Unowned session never touched. `--restart api` restarts one pane and reports dependents that may need restart. |
 | E08 ✓ | **Run local config without registering**: `spinup --start` in a directory with `.spinup.yml` (P09) | F02 | No registry or shim writes. tmux session named from config `name` with ownership tags. |
-| E09 | **Opt-in per-service logs** `--logs` via tmux `pipe-pane` and simple-mode tee (P11) | E07 | Files under `$XDG_STATE_HOME/spinup/logs/<alias>/<service>.log`, `0600`, bounded retention, never replaces an existing user pipe. |
-| E10 | **Port preflight** (P07) | E02 | `--check` reports ports declared in config or Compose that are already bound, with owning PID when readable. Never kills. |
+| E09 ✓ | **Opt-in per-service logs** `--logs` via tmux `pipe-pane` and simple-mode tee (P11) | E07 | Files under `$XDG_STATE_HOME/spinup/logs/<alias>/<service>.log`, `0600`, bounded retention, never replaces an existing user pipe. |
+| E10 ✓ | **Port preflight** (P07) | E02 | `--check` reports ports declared in config or Compose that are already bound, with owning PID when readable. Never kills. |
 
 ### 4.3 Detection
 
@@ -211,28 +211,28 @@ acceptance check. Items marked "P##" map to review proposals.
 | E06 ✓ | **Recognize project-owned launchers** (P10): `bin/dev`, `Makefile`/`justfile`/`Taskfile.yml`/`mise.toml` `dev` task, `Procfile`, root `dev` script | F12 | Offered before workspace expansion. Never both a root orchestrator and its children. Nothing executed during scan. |
 | E11 ✓ | **Detection explanations** (P04): every generated command carries `# from: apps/api/package.json scripts.dev` as a YAML comment | F12 | `--doctor` shows origin per service. |
 | E15 | **Runtime managers**: respect `.tool-versions`, `mise.toml`, `.nvmrc`, `.python-version`, `uv.lock`, Poetry, venv (P06) | F16 | `--check` reports the version the project declares vs. the one on PATH. No auto-install. |
-| E16 | **More stacks**: Go (`go run ./cmd/...` only when a `main` package is found), Rust (`cargo run` only for bin targets), Java/Kotlin (Gradle/Maven `bootRun`), Ruby (`bin/rails s`, `Procfile.dev`), PHP (`artisan serve`), Deno, Bun | E06, F13 | One fixture per stack in `test/fixtures/`. A library-only repo produces no runnable guess. |
+| E16 ✓ | **More stacks**: Go (`go run ./cmd/...` only when a `main` package is found), Rust (`cargo run` only for bin targets), Java/Kotlin (Gradle/Maven `bootRun`), Ruby (`bin/rails s`, `Procfile.dev`), PHP (`artisan serve`), Deno, Bun | E06, F13 | One fixture per stack in `test/fixtures/`. A library-only repo produces no runnable guess. |
 
 ### 4.4 Configuration
 
 | ID | Feature | Depends on | Acceptance |
 |---|---|---|---|
-| E17 | **JSON Schema for `.spinup.yml`** generated from the Zod schema, published at `https://<site>/schema/v1.json`, `# yaml-language-server: $schema=` line in generated files | F17, N05 | Schema round-trips every fixture. Editor completion works in VS Code with the YAML extension. |
+| E17 ✓ | **JSON Schema for `.spinup.yml`** (hosted on GitHub raw until Q6) generated from the Zod schema, published at `https://<site>/schema/v1.json`, `# yaml-language-server: $schema=` line in generated files | F17, N05 | Schema round-trips every fixture. Editor completion works in VS Code with the YAML extension. |
 | E18 | **Per-user overrides** `.spinup.local.yml` (gitignored) merged over the shared file: env, cwd, extra panes | F17 | Merge documented. `--plan` shows which fields came from the override. |
 | E19 | **Config `version` and migrations** | N05 | Loading a newer version fails with "upgrade spinup". Older versions migrate on save with a preview. |
-| E20 | **`spinup init`**: interactive first-time setup that previews alias, root, config path, shim destination, and lets the user pick or edit each detected command before writing (P08) | E11 | Cancellable with zero writes. Noninteractive falls back to current behavior. |
-| E21 | **Explicit project path and relink**: `spinup my-app --path ~/code/my-app`, `spinup my-app --relink` for moved repos and worktrees (P08) | F19 | Relink confirms before replacing, never orphans a shim. |
+| E20 ✓ | **`spinup init`** (as `--init`): interactive first-time setup that previews alias, root, config path, shim destination, and lets the user pick or edit each detected command before writing (P08) | E11 | Cancellable with zero writes. Noninteractive falls back to current behavior. |
+| E21 ✓ | **Explicit project path and relink**: `spinup my-app --path ~/code/my-app`, `spinup my-app --relink` for moved repos and worktrees (P08) | F19 | Relink confirms before replacing, never orphans a shim. |
 
 ### 4.5 Distribution and trust
 
 | ID | Feature | Depends on | Acceptance |
 |---|---|---|---|
-| E12 | **Checksums and provenance**: `SHA256SUMS` in every release, `install.sh` verifies before install, SLSA provenance via `actions/attest-build-provenance`, optional `cosign` verify | F21 | Corrupted or truncated download leaves the previous binary intact. `gh attestation verify` passes on a published asset. |
-| E22 | **Atomic install**: stage in `$INSTALL_DIR/.spinup.tmp.XXXX`, `mv` on the same filesystem, keep old binary on any failure; explicit musl/glibc check with a clear message | E12 | Interrupted install leaves the old binary runnable. |
-| E23 | **`spinup --self-update`** (or `spinup update`): reuses the installer logic, verifies checksum, prints changelog excerpt | E12, E22 | Downgrade refused unless `--version` given. |
-| E24 | **Package channels**: Homebrew tap (`PedroElizalde01/homebrew-spinup`), npm `spinup` if the name is available (Q4), AUR `spinup-bin` | E12 | Each channel installs the same checksummed asset. |
-| E25 | **Native CI matrix**: `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-13`, `macos-14`, each runs the built binary through register, plan, harmless launch, failure exit code, and cleanup | F21 | A failing regression blocks `publish`. |
-| E26 | **Man page and `docs/`**: generated from Commander help plus hand-written config reference | E17 | `man spinup` installed by Homebrew formula. |
+| E12 ✓ | **Checksums and provenance**: `SHA256SUMS` in every release, `install.sh` verifies before install, SLSA provenance via `actions/attest-build-provenance`, optional `cosign` verify | F21 | Corrupted or truncated download leaves the previous binary intact. `gh attestation verify` passes on a published asset. |
+| E22 ✓ | **Atomic install**: stage in `$INSTALL_DIR/.spinup.tmp.XXXX`, `mv` on the same filesystem, keep old binary on any failure; explicit musl/glibc check with a clear message | E12 | Interrupted install leaves the old binary runnable. |
+| E23 ✓ | **`spinup --update`** (or `spinup update`): reuses the installer logic, verifies checksum, prints changelog excerpt | E12, E22 | Downgrade refused unless `--version` given. |
+| E24 ◐ | **Package channels** (Homebrew formula and release job done; needs the tap repo and HOMEBREW_TAP_TOKEN; npm and AUR deferred): Homebrew tap (`PedroElizalde01/homebrew-spinup`), npm `spinup` if the name is available (Q4), AUR `spinup-bin` | E12 | Each channel installs the same checksummed asset. |
+| E25 ✓ | **Native CI matrix**: `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-13`, `macos-14`, each runs the built binary through register, plan, harmless launch, failure exit code, and cleanup | F21 | A failing regression blocks `publish`. |
+| E26 ✓ | **Man page and `docs/`**: generated from Commander help plus hand-written config reference | E17 | `man spinup` installed by Homebrew formula. |
 | E27 | **Opt-in, off-by-default crash reports** (never usage telemetry): `SPINUP_CRASH_REPORT=1` writes a redacted report locally for the user to attach to an issue | F03 | No network call is ever made by Spinup itself. |
 
 ### 4.6 Simplifications to make while touching the code (from review §6)
@@ -253,11 +253,11 @@ documentation and trust surface as well.
 
 | ID | Item | Notes |
 |---|---|---|
-| W14 | **Docs section** at `/docs`: install, quick start, config reference (generated from E17 schema), commands, env precedence, readiness, tmux workflow, upgrade from runit | Markdown in repo, rendered by Next with MDX or `next-mdx-remote`. Single source: pull `docs/` from the CLI repo at build time or as a git submodule (Q5). |
-| W15 | **Install matrix**: OS/arch table, checksum snippet, Homebrew/npm/AUR tabs once E24 ships | Read release assets from the GitHub API with revalidation (N02). |
-| W16 | **Changelog page** rendered from GitHub Releases | Same cached fetch as N02. |
+| W14 ✓ | **Docs section** at `/docs`: install, quick start, config reference (generated from E17 schema), commands, env precedence, readiness, tmux workflow, upgrade from runit | Markdown in repo, rendered by Next with MDX or `next-mdx-remote`. Single source: pull `docs/` from the CLI repo at build time or as a git submodule (Q5). |
+| W15 ✓ | **Install matrix**: OS/arch table, checksum snippet, Homebrew/npm/AUR tabs once E24 ships | Read release assets from the GitHub API with revalidation (N02). |
+| W16 ✓ | **Changelog page** (renders CHANGELOG.md) rendered from GitHub Releases | Same cached fetch as N02. |
 | W17 | **SEO and sharing**: `metadata.metadataBase`, OpenGraph and Twitter cards, generated OG image with the SPINUP glyph (`app/opengraph-image.tsx`), `robots.ts`, `sitemap.ts`, canonical URL | Requires a decided domain (Q6). |
-| W18 | **Hero terminal shows real output**: replay the actual `spinup my-app` card and a `--plan` run rather than hand-typed frames | Generate the frames from a fixture run in CI and commit the JSON, so the site never drifts from the CLI. |
+| W18 ✓ | **Hero terminal shows real output**: replay the actual `spinup my-app` card and a `--plan` run rather than hand-typed frames | Generate the frames from a fixture run in CI and commit the JSON, so the site never drifts from the CLI. |
 | W19 | **Accessibility pass**: `prefers-reduced-motion` on the terminal animation and section reveal, focus styles on copy button, contrast check on dim terminal text | `audit` skill once the rename lands. |
 | W20 | **Light/dark**: currently dark only. Add `prefers-color-scheme` light palette or explicitly commit to dark with a `color-scheme: dark` meta | Decide with Q1 brand direction. |
 | W21 | **Schema hosting**: serve `public/schema/v1.json` from E17 | Static file, immutable URL per version. |
@@ -274,7 +274,7 @@ and the current mismatch is visible to every user.
 | **M1: safety + brand** (current branch) | **Done 2026-09-16** except native macOS runs. Closed F19, F05, F06, F02, F03, F08. Landed B01–B07, W01–W13, N02, N04, N08. Tests typecheck via `tsconfig.test.json`. | G01–G06, G08. All tests green on Linux CI. Website builds with zero `runit` strings outside the migration notes. |
 | **M2: contract** | **Done 2026-09-16.** F17, F18, F09, F11, F15 tmux env, F16 remainder. E01, E02, E04, E05, E14, N01, N03, N05. | G07 met: `test/cli.test.ts` drives the real CLI for `--json`, `--action`, exit codes 1/2/42, `--dry-run`, shim routing. |
 | **M3: lifecycle + detection** | **Done 2026-09-16.** E03, E07, E08, F12, F13, F14, E06, E11, F10. Procfile (production) deliberately ignored; only `Procfile.dev`. | G09 met: `test/scan-generate.test.ts` fixture matrix, `test/readiness.test.ts`, readiness and lifecycle on private tmux servers in `test/tmux-workspace.test.ts` and `test/lifecycle.test.ts`. |
-| **M4: distribution** | F21, F22, E12, E22, E23, E25, E26, B08/B09 repo rename. | G10. Native macOS smoke results attached to the release. |
+| **M4: distribution** | **Done 2026-09-17** (v0.5.0). F21, F22, E12, E22, E23, E25, E26, B08/B09. | G10 met: native CI on linux-arm64, macos-arm64, macos-x64; release smoke per asset. |
 | **M5: product** | E09, E10, E13, E15–E21, E24, E27, W14–W21. | Each item ships behind its own acceptance test. |
 
 Rules carried over: fix shared boundaries, not callers. No prompts, editors, scans, or

@@ -7,6 +7,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-17
+
+### Added
+
+- `spinup --init` registers a project step by step: choose the alias, review each
+  detected command with where it came from, change, remove or add services, pick
+  tmux or foreground mode, preview everything that will be written, and confirm.
+  Cancelling writes nothing.
+- `--path <dir>` registers a directory other than the current one. `--relink`
+  points a registered alias at the current directory or `--path`, for moved
+  checkouts and worktrees, after confirmation. Running an alias from another
+  checkout of the project suggests `--relink`.
+- `-y/--yes` answers confirmations for scripts. Without a terminal, `--relink` and
+  `--regenerate` refuse unless it is given.
+- `--logs` writes each service's output to
+  `$XDG_STATE_HOME/spinup/logs/<alias>/<service>.log`: private files, the previous
+  run kept as `.log.1`, and a 10 MB limit per file. `--status` shows the paths.
+- `spinup --update [version]` replaces the binary with a release after checking it
+  against `SHA256SUMS` and confirming it runs.
+- `spinup --completion bash|zsh|fish` prints a completion script for aliases, flags,
+  actions and services, for `spinup` and every alias command.
+- `--check` and `--dry-run` report ports the action needs that are already in use,
+  from readiness conditions and Compose's published ports, naming the listener.
+- Detection for Go, Rust, Ruby, PHP, Java/Kotlin (Spring Boot, Quarkus) and Deno.
+- `schema/spinup.schema.json`, generated from the config schema. Generated configs
+  reference it so editors complete and validate `.spinup.yml`.
+- Releases include musl builds for Alpine, a man page, `SHA256SUMS` and signed build
+  provenance.
+- `docs/` with installation, a quick start, configuration, commands, detection,
+  sessions and upgrading.
+
+### Changed
+
+- The installer verifies checksums, confirms the binary runs and reports the
+  expected version, stages the download in the destination directory, and only
+  then replaces an existing binary. It picks musl builds automatically and rejects
+  malformed options before downloading.
+- Every release is smoke-tested on each published file, on Linux x64 and arm64
+  (glibc and musl) and macOS arm64 and x64, and a tag that disagrees with
+  `package.json` is refused. CI runs the test suite natively on the same platforms.
+- All workflow actions are pinned to commit SHAs.
+
+### Fixed
+
+- Shell completion on macOS's bash 3.2, which has no `mapfile`.
+
 ## [0.4.0] - 2026-09-16
 
 ### Upgrading
