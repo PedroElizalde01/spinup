@@ -3,49 +3,55 @@
     "flag": "spinup my-app",
     "command": "spinup my-app",
     "description": "Register the project: the setup card, .spinup.yml and a my-app command.",
-    "output": "┌────────────────────────────────────────────────────────────┐\n│  █▀▀ █▀█ █ █▄ █ █ █ █▀█                                    │\n│  ▄▄█ █▀▀ █ █ ▀█ █▄█ █▀▀                                    │\n│                                                            │\n│ alias      my-app                                          │\n│ status     registered                                      │\n│ command    ~/.local/bin/my-app                             │\n│ root       ~/code/my-app                                   │\n├────────────────────────────────────────────────────────────┤\n│ stack      node                                            │\n│ package    npm                                             │\n│ frameworks NestJS, Next.js                                 │\n│ services   api, web                                        │\n├────────────────────────────────────────────────────────────┤\n│ actions    dev (default)                                   │\n│ action     dev                                             │\n│ mode       tmux                                            │\n│ windows    1 (services)                                    │\n│ panes      2 (api, web)                                    │\n│ layout     even-horizontal                                 │\n├────────────────────────────────────────────────────────────┤\n│ next       my-app                                          │\n└────────────────────────────────────────────────────────────┘"
+    "output": "┌────────────────────────────────────────────────────────────┐\n│  █▀▀ █▀█ █ █▄ █ █ █ █▀█                                    │\n│  ▄▄█ █▀▀ █ █ ▀█ █▄█ █▀▀                                    │\n│                                                            │\n│ alias      my-app                                          │\n│ status     registered                                      │\n│ command    ~/.local/bin/my-app                             │\n│ root       ~/code/my-app                                   │\n├────────────────────────────────────────────────────────────┤\n│ stack      mixed                                           │\n│ package    npm                                             │\n│ frameworks Docker Compose, NestJS, Next.js                 │\n│ services   compose, api, web, worker                       │\n├────────────────────────────────────────────────────────────┤\n│ actions    dev (default), migrate, test                    │\n│ action     dev                                             │\n│ mode       tmux                                            │\n│ windows    2 (infra, apps)                                 │\n│ panes      4 (compose, api, worker, web)                   │\n│ layout     main-vertical                                   │\n├────────────────────────────────────────────────────────────┤\n│ next       my-app                                          │\n└────────────────────────────────────────────────────────────┘"
   },
   {
     "flag": "--plan",
     "command": "my-app --plan",
-    "description": "Start order, directories and readiness.",
-    "output": "+------------------+\n|  Execution Plan  |\n+------------------+\n\nAction: dev (tmux)\nRoot:   ~/code/my-app\n\nStart order:\n  1. api\n     cwd ~/code/my-app/apps/api\n     npm run start:dev\n  2. web  after api\n     cwd ~/code/my-app/apps/web\n     npm run dev\n\nWindows:\n  services (even-horizontal): api, web"
+    "description": "Start order, what each service waits for, and when it counts as ready.",
+    "output": "+------------------+\n|  Execution Plan  |\n+------------------+\n\nAction: dev (tmux)\nRoot:   ~/code/my-app\n\nStart order:\n  1. compose  ready when port localhost:5432\n     cwd ~/code/my-app\n     docker compose up\n  2. api  after compose  ready when http http://localhost:3000/health\n     cwd ~/code/my-app/apps/api\n     npm run start:dev\n  3. worker  after compose, api\n     cwd ~/code/my-app/apps/worker\n     npm run dev\n  4. web  after api  ready when log /Ready in \\d+ms/\n     cwd ~/code/my-app/apps/web\n     npm run dev\n\nWindows:\n  infra: compose\n  apps (main-vertical): api, worker, web"
   },
   {
     "flag": "--graph",
     "command": "my-app --graph",
-    "description": "Which service waits for which.",
-    "output": "+-----------------+\n|  Service Graph  |\n+-----------------+\n\nAction: dev\n\napi\nweb depends on api"
+    "description": "The dependency graph with every readiness condition.",
+    "output": "+-----------------+\n|  Service Graph  |\n+-----------------+\n\nAction: dev\n\ncompose  (ready when port localhost:5432)\napi depends on compose  (ready when http http://localhost:3000/health)\nworker depends on compose, api\nweb depends on api  (ready when log /Ready in \\d+ms/)"
   },
   {
     "flag": "--check",
     "command": "my-app --check",
-    "description": "Required tools and busy ports. Exits 2 when the action cannot run.",
-    "output": "+--------------------+\n| Environment Check  |\n+--------------------+\n\nAction: dev\n\ntmux ✓\nnpm ✓\nnode ✓\n\nReady."
+    "description": "Required tools, the Docker daemon and busy ports. Exits 2 when the action cannot run.",
+    "output": "+--------------------+\n| Environment Check  |\n+--------------------+\n\nAction: dev\n\ntmux ✓\ndocker ✓\nnpm ✓\nnode ✓\ndocker compose ✓\ndocker daemon ✓\n\nReady."
   },
   {
     "flag": "--doctor",
     "command": "my-app --doctor",
     "description": "Config, detection with the origin of each command, tools and notes.",
-    "output": "+------------------+\n|  Project Doctor  |\n+------------------+\n\nProject: my-app\nPath: ~/code/my-app\n\nConfig file:\n  ~/code/my-app/.spinup.yml ✓\n\nActions:\n  dev (default)\n\nInspecting: dev (tmux)\n\nStack detection:\n  node ✓\n  frameworks NestJS, Next.js\n\nA fresh scan would generate:\n  api: npm run start:dev  (apps/api/package.json scripts.start:dev)\n  web: npm run dev  (apps/web/package.json scripts.dev)\n\nServices in this action:\n  api\n  web\n\nPackage manager:\n  npm\n\nTmux: required\n  installed ✓\n\nDocker: not required\n  installed ✓\n\nStatus:\n  ready"
+    "output": "+------------------+\n|  Project Doctor  |\n+------------------+\n\nProject: my-app\nPath: ~/code/my-app\n\nConfig file:\n  ~/code/my-app/.spinup.yml ✓\n\nActions:\n  dev (default)\n  migrate\n  test\n\nInspecting: dev (tmux)\n\nStack detection:\n  mixed ✓\n  frameworks Docker Compose, NestJS, Next.js\n\nA fresh scan would generate:\n  compose: docker compose up  (docker-compose.yml)\n  api: npm run start:dev  (apps/api/package.json scripts.start:dev)\n  web: npm run dev  (apps/web/package.json scripts.dev)\n  worker: npm run dev  (apps/worker/package.json scripts.dev)\n\nServices in this action:\n  compose\n  api\n  worker\n  web\n\nPackage manager:\n  npm\n\nTmux: required\n  installed ✓\n\nDocker: required\n  installed ✓\n\nStatus:\n  ready"
   },
   {
     "flag": "--env",
     "command": "my-app --env",
-    "description": "Loaded environment files and keys, values masked.",
-    "output": "+---------------+\n|  Environment  |\n+---------------+\n\nAction: dev\nFiles:  .env\n\nLoaded environment variables:\n\nDATABASE_URL=*** [.env]\nPORT=*** [.env]\nSESSION_SECRET=*** [.env]"
+    "description": "Every environment file and key, values masked, later files winning.",
+    "output": "+---------------+\n|  Environment  |\n+---------------+\n\nAction: dev\nFiles:  .env, .env.local\n\nLoaded environment variables:\n\nDATABASE_URL=*** [.env]\nLOG_LEVEL=*** [.env.local]\nNEXT_PUBLIC_API_URL=*** [.env]\nPORT=*** [.env]\nREDIS_URL=*** [.env]\nSESSION_SECRET=*** [.env]"
   },
   {
     "flag": "--dry-run",
     "command": "my-app --dry-run",
-    "description": "Everything a launch resolves, nothing started.",
-    "output": "Action: dev (tmux)\nRoot:   ~/code/my-app\n\nStart order:\n  1. api\n     cwd ~/code/my-app/apps/api\n     npm run start:dev\n  2. web  after api\n     cwd ~/code/my-app/apps/web\n     npm run dev\n\nWindows:\n  services (even-horizontal): api, web\n\nEnvironment:\n  files: .env\n  DATABASE_URL [.env]\n  PORT [.env]\n  SESSION_SECRET [.env]\n\ntmux session: my-app\n\n[dry-run] nothing was started"
+    "description": "Everything a launch resolves, including ports, with nothing started.",
+    "output": "Action: dev (tmux)\nRoot:   ~/code/my-app\n\nStart order:\n  1. compose  ready when port localhost:5432\n     cwd ~/code/my-app\n     docker compose up\n  2. api  after compose  ready when http http://localhost:3000/health\n     cwd ~/code/my-app/apps/api\n     npm run start:dev\n  3. worker  after compose, api\n     cwd ~/code/my-app/apps/worker\n     npm run dev\n  4. web  after api  ready when log /Ready in \\d+ms/\n     cwd ~/code/my-app/apps/web\n     npm run dev\n\nWindows:\n  infra: compose\n  apps (main-vertical): api, worker, web\n\nEnvironment:\n  files: .env, .env.local\n  DATABASE_URL [.env]\n  LOG_LEVEL [.env.local]\n  NEXT_PUBLIC_API_URL [.env]\n  PORT [.env]\n  REDIS_URL [.env]\n  SESSION_SECRET [.env]\n\ntmux session: my-app\n\n[dry-run] nothing was started"
+  },
+  {
+    "flag": "--action migrate",
+    "command": "my-app --action migrate --plan",
+    "description": "Any other action in the config, such as migrations, with the same tooling.",
+    "output": "+------------------+\n|  Execution Plan  |\n+------------------+\n\nAction: migrate (simple)\nRoot:   ~/code/my-app\n\nStart order:\n  1. compose  ready when port localhost:5432\n     cwd ~/code/my-app\n     docker compose up -d postgres\n  2. prisma  after compose\n     cwd ~/code/my-app/apps/api\n     npm run db:migrate && npm run db:seed"
   },
   {
     "flag": "--list",
     "command": "spinup --list",
-    "description": "Every registered project.",
-    "output": "Registered projects:\n\nmy-app  dev (tmux)  ~/code/my-app"
+    "description": "Every registered project and where it lives.",
+    "output": "Registered projects:\n\nblog    dev (tmux)    ~/code/blog\ndocs    dev (simple)  ~/code/docs\nmy-app  dev (tmux)    ~/code/my-app"
   },
   {
     "flag": "--help",

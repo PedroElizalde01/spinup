@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PedroElizalde01/spinup/main/schema/spinup.schema.json
+version: 1
+name: my-app
+root: .
+default: dev
+actions:
+  dev:
+    mode: tmux
+    windows:
+      - name: infra
+        panes:
+          - name: compose
+            cwd: .
+            cmd: docker compose up
+            ready: { port: 5432 }
+      - name: apps
+        layout: main-vertical
+        panes:
+          - name: api
+            cwd: apps/api
+            cmd: npm run start:dev
+            dependsOn: [compose]
+            ready: { http: "http://localhost:3000/health" }
+          - name: worker
+            cwd: apps/worker
+            cmd: npm run dev
+            dependsOn: [compose, api]
+            env: { QUEUE_CONCURRENCY: "4" }
+          - name: web
+            cwd: apps/web
+            cmd: npm run dev
+            dependsOn: [api]
+            ready: { log: "Ready in \\d+ms" }
+  migrate:
+    mode: simple
+    tasks:
+      - name: compose
+        cwd: .
+        cmd: docker compose up -d postgres
+        ready: { port: 5432 }
+      - name: prisma
+        cwd: apps/api
+        cmd: npm run db:migrate && npm run db:seed
+        dependsOn: [compose]
+  test:
+    mode: simple
+    tasks:
+      - name: api
+        cwd: apps/api
+        cmd: npm test
+      - name: web
+        cwd: apps/web
+        cmd: npm test

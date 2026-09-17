@@ -1,0 +1,5 @@
+{
+  "name": "api",
+  "dependencies": { "@nestjs/core": "11.0.0", "@prisma/client": "6.0.0" },
+  "scripts": { "start": "nest start", "start:dev": "nest start --watch", "db:migrate": "prisma migrate dev", "db:seed": "prisma db seed" }
+}
