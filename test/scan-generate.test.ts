@@ -289,3 +289,81 @@ describe("scanner resilience", () => {
     expect((await detect(root)).detection.services[0]!.command).toBe("python3 manage.py runserver");
   });
 });
+
+describe("more stacks", () => {
+  async function commands(files: Record<string, string>, executable: string[] = []) {
+    const root = await fixture(files);
+
+    for (const file of executable) {
+      await chmod(path.join(root, file), 0o755);
+    }
+
+    const { detection } = await detect(root);
+    return { detection, services: detection.services.map((service) => [service.name, service.command, service.origin]) };
+  }
+
+  test("Go: air wins, then a root main package, then each cmd/ main; a library module runs nothing", async () => {
+    expect((await commands({ "go.mod": "module x\n", "main.go": "package main\n", ".air.toml": "" })).services).toEqual([
+      ["app", "air", ".air.toml exists"],
+    ]);
+    expect((await commands({ "go.mod": "module x\n", "main.go": "package main\n" })).services).toEqual([
+      ["app", "go run .", "package main in main.go"],
+    ]);
+    const cmds = await commands({ "go.mod": "module x\n", "cmd/api/main.go": "package main\n", "cmd/worker/main.go": "package main\n", "cmd/lib/main.go": "package lib\n" });
+    expect(cmds.services.map(([name, command]) => [name, command])).toEqual([
+      ["api", "go run ./cmd/api"],
+      ["worker", "go run ./cmd/worker"],
+    ]);
+    const library = await commands({ "go.mod": "module x\n", "pkg/util.go": "package util\n" });
+    expect(library.services).toEqual([]);
+    expect(library.detection.stack).toBe("go");
+  });
+
+  test("Rust: a binary crate runs, several bins get a service each, a library runs nothing", async () => {
+    expect((await commands({ "Cargo.toml": '[package]\nname = "x"\n\n[dependencies]\naxum = "0.7"\n', "src/main.rs": "fn main() {}" })).services).toEqual([
+      ["app", "cargo run", "src/main.rs exists"],
+    ]);
+    const bins = await commands({ "Cargo.toml": '[package]\nname = "x"\n\n[[bin]]\nname = "api"\npath = "src/api.rs"\n\n[[bin]]\nname = "jobs"\npath = "src/jobs.rs"\n' });
+    expect(bins.services.map(([name, command]) => [name, command])).toEqual([
+      ["api", "cargo run --bin api"],
+      ["jobs", "cargo run --bin jobs"],
+    ]);
+    expect((await commands({ "Cargo.toml": '[package]\nname = "x"\n', "src/lib.rs": "" })).services).toEqual([]);
+  });
+
+  test("Ruby, PHP and Deno use their framework's own entrypoints", async () => {
+    expect((await commands({ Gemfile: "gem 'rails'\n", "bin/rails": "#!/usr/bin/env ruby\n" }, ["bin/rails"])).services[0]!.slice(1, 2)).toEqual(["bin/rails server"]);
+    expect((await commands({ Gemfile: "gem 'sinatra'\n", "config.ru": "run App\n" })).services[0]!.slice(1, 2)).toEqual(["bundle exec rackup"]);
+    expect((await commands({ artisan: "#!/usr/bin/env php\n", "composer.json": "{}" }, ["artisan"])).services[0]!.slice(1, 2)).toEqual(["php artisan serve"]);
+    expect((await commands({ "composer.json": '{"require":{"symfony/framework-bundle":"7"}}', "public/index.php": "<?php" })).detection.frameworks).toContain("Symfony");
+    expect((await commands({ "deno.jsonc": '{\n  // local\n  "tasks": { "dev": "deno run -A main.ts" }\n}' })).services[0]!.slice(1, 2)).toEqual(["deno task dev"]);
+  });
+
+  test("JVM: Spring Boot and Quarkus through the project's wrapper; a plain build runs nothing", async () => {
+    expect(
+      (await commands({ "build.gradle.kts": 'plugins { id("org.springframework.boot") version "3.3.0" }', gradlew: "#!/bin/sh" })).services,
+    ).toEqual([["app", "./gradlew bootRun", "Spring Boot plugin in build.gradle.kts"]]);
+    expect((await commands({ "pom.xml": "<artifactId>quarkus-maven-plugin</artifactId>" })).services[0]!.slice(1, 2)).toEqual(["mvn quarkus:dev"]);
+    expect((await commands({ "pom.xml": "<project/>" })).services).toEqual([]);
+  });
+
+  test("a polyglot repo gets a service per project, with runtime-specific tools", async () => {
+    const root = await fixture({
+      "services/api/go.mod": "module api\n",
+      "services/api/main.go": "package main\n",
+      "services/search/Cargo.toml": '[package]\nname = "search"\n',
+      "services/search/src/main.rs": "fn main() {}",
+      "apps/web/package.json": json({ scripts: { dev: "vite" } }),
+    });
+
+    const config = await generate(root);
+    expect(services(config).map((service) => [service.name, service.cwd, service.cmd])).toEqual([
+      ["web", "apps/web", "npm run dev"],
+      ["api", "services/api", "go run ."],
+      ["search", "services/search", "cargo run"],
+    ]);
+
+    const { inferRequiredTools } = await import("../src/core/health.ts");
+    expect(inferRequiredTools(config, "dev")).toEqual(expect.arrayContaining(["tmux", "npm", "node", "go", "cargo"]));
+  });
+});

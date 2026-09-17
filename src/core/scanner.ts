@@ -39,6 +39,29 @@ export type PythonProject = {
   entries: PythonEntry[];
 };
 
+/** Files other ecosystems use to declare a runnable application. Absent means not found. */
+export type EcosystemFacts = {
+  goMod?: string;
+  goMainAtRoot: boolean;
+  /** cmd/<name> directories that contain a main package. */
+  goCommands: string[];
+  airConfig: boolean;
+  cargoToml?: string;
+  rustMain: boolean;
+  gemfile?: string;
+  railsBin: boolean;
+  configRu: boolean;
+  artisan: boolean;
+  composerJson?: string;
+  publicIndexPhp: boolean;
+  gradleBuild?: string;
+  gradleFile?: "build.gradle" | "build.gradle.kts";
+  gradlew: boolean;
+  pomXml?: string;
+  mvnw: boolean;
+  denoTasks?: Record<string, string>;
+};
+
 export type DirectoryScan = {
   /** Relative to the project root; "." for the root itself. */
   path: string;
@@ -46,7 +69,26 @@ export type DirectoryScan = {
   python?: PythonProject;
   hasServerJs: boolean;
   hasIndexJs: boolean;
+  ecosystem: EcosystemFacts;
 };
+
+/** True when a directory holds a project of any supported ecosystem. */
+export function hasAnyProject(directory: DirectoryScan): boolean {
+  const facts = directory.ecosystem;
+  return Boolean(
+    directory.packageJson ||
+      directory.python ||
+      facts.goMod ||
+      facts.cargoToml ||
+      facts.gemfile ||
+      facts.railsBin ||
+      facts.artisan ||
+      facts.composerJson ||
+      facts.gradleBuild ||
+      facts.pomXml ||
+      facts.denoTasks,
+  );
+}
 
 /** A command the project itself defines for development, with where it came from. */
 export type LauncherGroup = {
@@ -61,7 +103,7 @@ export type ScanResult = {
   packageManagerConflict?: string;
   monorepo: boolean;
   workspaceDeclared: boolean;
-  /** Workspace members, or apps/ services/ packages/ children when nothing is declared. */
+  /** Workspace members, or apps/ services/ packages/ crates/ children when nothing is declared. */
   candidates: DirectoryScan[];
   launchers: LauncherGroup[];
   compose?: ComposeProject;
@@ -197,16 +239,120 @@ async function scanPython(directory: string): Promise<PythonProject | undefined>
   };
 }
 
+const GO_MAIN = /^package\s+main\b/m;
+
+async function isGoMain(file: string): Promise<boolean> {
+  const source = await readTextIfExists(file);
+  return source !== undefined && GO_MAIN.test(source);
+}
+
+async function isExecutableFile(file: string): Promise<boolean> {
+  try {
+    const stats = await stat(file);
+    return stats.isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Parses deno.json, or deno.jsonc with its comments removed; only tasks matter. */
+function denoTasks(raw: string | undefined): Record<string, string> | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  try {
+    const withoutComments = raw.replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    const parsed = JSON.parse(withoutComments) as { tasks?: Record<string, string> };
+    return parsed.tasks ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function scanEcosystems(directory: string): Promise<EcosystemFacts> {
+  const goMod = await readTextIfExists(path.join(directory, "go.mod"));
+  const goCommands: string[] = [];
+
+  if (goMod !== undefined) {
+    for (const command of await childDirectories(directory, "cmd")) {
+      if (await isGoMain(path.join(directory, command, "main.go"))) {
+        goCommands.push(path.posix.basename(command));
+      }
+    }
+  }
+
+  const [
+    goMainAtRoot,
+    airConfig,
+    cargoToml,
+    rustMain,
+    gemfile,
+    railsBin,
+    configRu,
+    artisan,
+    composerJson,
+    publicIndexPhp,
+    gradleGroovy,
+    gradleKotlin,
+    gradlew,
+    pomXml,
+    mvnw,
+    denoJson,
+    denoJsonc,
+  ] = await Promise.all([
+    goMod !== undefined ? isGoMain(path.join(directory, "main.go")) : Promise.resolve(false),
+    pathExists(path.join(directory, ".air.toml")),
+    readTextIfExists(path.join(directory, "Cargo.toml")),
+    pathExists(path.join(directory, "src", "main.rs")),
+    readTextIfExists(path.join(directory, "Gemfile")),
+    isExecutableFile(path.join(directory, "bin", "rails")),
+    pathExists(path.join(directory, "config.ru")),
+    isExecutableFile(path.join(directory, "artisan")),
+    readTextIfExists(path.join(directory, "composer.json")),
+    pathExists(path.join(directory, "public", "index.php")),
+    readTextIfExists(path.join(directory, "build.gradle")),
+    readTextIfExists(path.join(directory, "build.gradle.kts")),
+    pathExists(path.join(directory, "gradlew")),
+    readTextIfExists(path.join(directory, "pom.xml")),
+    pathExists(path.join(directory, "mvnw")),
+    readTextIfExists(path.join(directory, "deno.json")),
+    readTextIfExists(path.join(directory, "deno.jsonc")),
+  ]);
+
+  return {
+    goMod,
+    goMainAtRoot,
+    goCommands: goCommands.sort(),
+    airConfig: goMod !== undefined && airConfig,
+    cargoToml,
+    rustMain,
+    gemfile,
+    railsBin,
+    configRu,
+    artisan,
+    composerJson,
+    publicIndexPhp,
+    gradleBuild: gradleKotlin ?? gradleGroovy,
+    gradleFile: gradleKotlin !== undefined ? "build.gradle.kts" : gradleGroovy !== undefined ? "build.gradle" : undefined,
+    gradlew,
+    pomXml,
+    mvnw,
+    denoTasks: denoTasks(denoJson ?? denoJsonc),
+  };
+}
+
 async function scanDirectory(projectRoot: string, relativePath: string): Promise<DirectoryScan> {
   const directory = path.join(projectRoot, relativePath);
-  const [packageJson, python, hasServerJs, hasIndexJs] = await Promise.all([
+  const [packageJson, python, hasServerJs, hasIndexJs, ecosystem] = await Promise.all([
     readPackageJson(path.join(directory, "package.json")),
     scanPython(directory),
     pathExists(path.join(directory, "server.js")),
     pathExists(path.join(directory, "index.js")),
+    scanEcosystems(directory),
   ]);
 
-  return { path: relativePath, packageJson, python, hasServerJs, hasIndexJs };
+  return { path: relativePath, packageJson, python, hasServerJs, hasIndexJs, ecosystem };
 }
 
 const LOCKFILES: Array<[string, PackageManager]> = [
@@ -387,7 +533,7 @@ export async function scanProject(projectRoot: string): Promise<ScanResult> {
   const root = await scanDirectory(resolvedRoot, ".");
   const patterns = await workspacePatterns(resolvedRoot, root.packageJson);
   const conventional = (
-    await Promise.all(["apps", "services", "packages"].map((dir) => childDirectories(resolvedRoot, dir)))
+    await Promise.all(["apps", "services", "packages", "crates"].map((dir) => childDirectories(resolvedRoot, dir)))
   ).flat();
   const declaredMembers = patterns ? await resolveWorkspaces(resolvedRoot, patterns) : [];
 
@@ -404,7 +550,8 @@ export async function scanProject(projectRoot: string): Promise<ScanResult> {
 
       const scanned = await scanDirectory(resolvedRoot, relative);
 
-      if (scanned.python && !scanned.packageJson) {
+      // A JS workspace declaration cannot list a Python, Go or Rust service.
+      if (!scanned.packageJson && hasAnyProject(scanned)) {
         candidates.push(scanned);
       }
     }
@@ -422,7 +569,7 @@ export async function scanProject(projectRoot: string): Promise<ScanResult> {
   return {
     root,
     ...packageManager,
-    monorepo: Boolean(patterns) || hasTurbo || hasNx || candidates.some((candidate) => candidate.packageJson || candidate.python),
+    monorepo: Boolean(patterns) || hasTurbo || hasNx || candidates.some((candidate) => hasAnyProject(candidate)),
     workspaceDeclared: Boolean(patterns),
     candidates: candidates.sort((left, right) => left.path.localeCompare(right.path)),
     launchers,

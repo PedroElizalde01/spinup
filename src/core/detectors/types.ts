@@ -1,7 +1,7 @@
 import type { PackageManager } from "../scanner.ts";
 
 /** "launcher" is a command the project defines itself: bin/dev, make dev, a Procfile.dev entry. */
-export type RuntimeKind = "node" | "python" | "docker" | "launcher";
+export type RuntimeKind = "node" | "python" | "docker" | "go" | "rust" | "ruby" | "php" | "java" | "deno" | "launcher";
 
 export type DetectedService = {
   name: string;
@@ -19,7 +19,7 @@ export type DetectedService = {
 };
 
 export type ProjectDetection = {
-  stack: "node" | "python" | "docker" | "mixed" | "unknown";
+  stack: "node" | "python" | "docker" | "go" | "rust" | "ruby" | "php" | "java" | "deno" | "mixed" | "unknown";
   packageManager?: PackageManager;
   frameworks: string[];
   services: DetectedService[];

@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { detectComposeService } from "./detectors/docker.ts";
 import { buildExecCommand, detectNodeFrameworks, detectNodeServices } from "./detectors/node.ts";
+import { detectEcosystemServices } from "./detectors/ecosystems.ts";
 import { detectPythonFrameworks, detectPythonService } from "./detectors/python.ts";
 import type { DetectedService, ProjectDetection } from "./detectors/types.ts";
 import type { ScanResult } from "./scanner.ts";
@@ -12,11 +13,18 @@ function sortedUnique(values: string[]): string[] {
 
 function resolveStack(scan: ScanResult): ProjectDetection["stack"] {
   const directories = [scan.root, ...scan.candidates];
+  const has = (test: (directory: (typeof directories)[number]) => unknown) => directories.some((directory) => Boolean(test(directory)));
   const kinds = [
-    directories.some((directory) => directory.packageJson) ? "node" : undefined,
-    directories.some((directory) => directory.python) ? "python" : undefined,
+    has((directory) => directory.packageJson) ? "node" : undefined,
+    has((directory) => directory.python) ? "python" : undefined,
+    has((directory) => directory.ecosystem.goMod !== undefined) ? "go" : undefined,
+    has((directory) => directory.ecosystem.cargoToml !== undefined) ? "rust" : undefined,
+    has((directory) => directory.ecosystem.gemfile !== undefined || directory.ecosystem.railsBin) ? "ruby" : undefined,
+    has((directory) => directory.ecosystem.composerJson !== undefined || directory.ecosystem.artisan) ? "php" : undefined,
+    has((directory) => directory.ecosystem.gradleBuild !== undefined || directory.ecosystem.pomXml !== undefined) ? "java" : undefined,
+    has((directory) => directory.ecosystem.denoTasks !== undefined) ? "deno" : undefined,
     scan.compose && scan.compose.services.length > 0 ? "docker" : undefined,
-  ].filter((kind): kind is "node" | "python" | "docker" => Boolean(kind));
+  ].filter((kind): kind is Exclude<ProjectDetection["stack"], "mixed" | "unknown"> => Boolean(kind));
 
   if (kinds.length === 0) {
     return "unknown";
@@ -111,17 +119,20 @@ export function detectProject(scan: ScanResult): ProjectDetection {
       notes.push(`Also found ${other.origin}; using ${launcher.origin}. Edit the config to use the other one.`);
     }
   } else {
-    const python = [
-      detectPythonService("app", scan.root, notes),
-      ...(scan.monorepo
-        ? scan.candidates.map((candidate) => detectPythonService(path.posix.basename(candidate.path), candidate, notes))
-        : []),
-    ].filter((service): service is DetectedService => Boolean(service));
+    const directories = [
+      { name: "app", directory: scan.root },
+      ...(scan.monorepo ? scan.candidates.map((candidate) => ({ name: path.posix.basename(candidate.path), directory: candidate })) : []),
+    ];
+    const python = directories
+      .map(({ name, directory }) => detectPythonService(name, directory, notes))
+      .filter((service): service is DetectedService => Boolean(service));
+    const other = directories.flatMap(({ name, directory }) => detectEcosystemServices(name, directory));
 
     services = [
       ...[detectComposeService(scan, notes)].filter((service): service is DetectedService => Boolean(service)),
       ...detectNodeServices(scan),
       ...python,
+      ...other,
     ];
   }
 
@@ -129,6 +140,7 @@ export function detectProject(scan: ScanResult): ProjectDetection {
   const frameworks = sortedUnique([
     ...directories.flatMap((directory) => detectNodeFrameworks(directory.packageJson)),
     ...directories.flatMap((directory) => detectPythonFrameworks(directory.python)),
+    ...directories.flatMap((directory) => detectEcosystemServices("", directory).flatMap((service) => (service.framework ? [service.framework] : []))),
     ...(scan.compose && scan.compose.services.length > 0 ? ["Docker Compose"] : []),
     ...(scan.prisma ? ["Prisma"] : []),
   ]);

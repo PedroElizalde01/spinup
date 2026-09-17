@@ -39,6 +39,16 @@ const TOOL_COMMANDS: Record<string, ToolDefinition> = {
   make: { commands: ["make"], args: ["--version"] },
   task: { commands: ["task"], args: ["--version"] },
   mise: { commands: ["mise"], args: ["--version"] },
+  go: { commands: ["go"], args: ["version"] },
+  air: { commands: ["air"], args: ["-v"] },
+  cargo: { commands: ["cargo"], args: ["--version"] },
+  ruby: { commands: ["ruby"], args: ["-v"] },
+  bundle: { commands: ["bundle"], args: ["-v"] },
+  php: { commands: ["php"], args: ["-v"] },
+  java: { commands: ["java"], args: ["-version"] },
+  gradle: { commands: ["gradle"], args: ["--version"] },
+  mvn: { commands: ["mvn"], args: ["-v"] },
+  deno: { commands: ["deno"], args: ["--version"] },
 };
 
 /**
@@ -67,6 +77,18 @@ const COMMAND_TOOLS: Record<string, string[]> = {
   make: ["make"],
   task: ["task"],
   mise: ["mise"],
+  go: ["go"],
+  air: ["air", "go"],
+  cargo: ["cargo"],
+  "bin/rails": ["ruby"],
+  bundle: ["bundle", "ruby"],
+  php: ["php"],
+  // The wrappers download their own build tool but still need a JDK.
+  "./gradlew": ["java"],
+  gradle: ["gradle", "java"],
+  "./mvnw": ["java"],
+  mvn: ["mvn", "java"],
+  deno: ["deno"],
 };
 
 /** Leading `VAR=value` assignments are part of the shell line, not the program. */
