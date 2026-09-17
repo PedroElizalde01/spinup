@@ -3,7 +3,7 @@ import path from "node:path";
 import { buildDependencyGraph } from "../core/dependencies.ts";
 import { ReadinessFailure, scheduleServices } from "../core/readiness.ts";
 import { prepareLogFile, tmuxPipeCommand } from "../core/logs.ts";
-import { addPane, applyWindowLayout, keepPaneOnExit, paneView, pipePaneTo, renameWindow, respawnPane } from "./layout.ts";
+import { addPane, applyWindowLayout, keepPaneOnExit, paneHasPipe, paneView, pipePaneTo, renameWindow, respawnPane } from "./layout.ts";
 import {
   attachSession,
   createSession,
@@ -102,9 +102,13 @@ async function startPanes(
         await keepPaneOnExit(paneId);
       }
 
-      // Opened before the command starts, so its first lines are captured.
-      if (logAlias) {
-        await pipePaneTo(paneId, tmuxPipeCommand(await prepareLogFile(logAlias, pane.name)));
+      // Opened before the command starts, so its first lines are captured where the
+      // pipe survives respawn-pane. Some tmux versions close it on respawn; then it is
+      // reopened, and only what the service printed in that instant is missed.
+      const logCommand = logAlias ? tmuxPipeCommand(await prepareLogFile(logAlias, pane.name)) : undefined;
+
+      if (logCommand) {
+        await pipePaneTo(paneId, logCommand);
       }
 
       await respawnPane(paneId, {
@@ -112,6 +116,10 @@ async function startPanes(
         env,
         cmd: pane.cmd,
       });
+
+      if (logCommand && !(await paneHasPipe(paneId))) {
+        await pipePaneTo(paneId, logCommand);
+      }
 
       return paneView(paneId);
     },

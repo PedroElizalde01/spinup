@@ -357,14 +357,21 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
     try {
       const action: TmuxAction = {
         mode: "tmux",
-        windows: [{ name: "services", panes: [{ name: "api", cwd: ".", cmd: "sh -c 'echo PANE_LOGGED; sleep 30'" }] }],
+        windows: [{ name: "services", panes: [{ name: "api", cwd: ".", cmd: "sh -c 'sleep 1; echo PANE_LOGGED; sleep 30'" }] }],
       };
 
       await launchTmuxWorkspace(projectRoot, config(action), action, "logged", {}, "dev", "logged");
-      await Bun.sleep(1200);
 
+      // Output printed after the pane is up must always reach the log.
       const log = path.join(stateHome, "spinup", "logs", "logged", "api.log");
-      expect(await Bun.file(log).text()).toContain("PANE_LOGGED");
+      let contents = "";
+
+      for (let attempt = 0; attempt < 50 && !contents.includes("PANE_LOGGED"); attempt += 1) {
+        await Bun.sleep(100);
+        contents = await Bun.file(log).text();
+      }
+
+      expect(contents).toContain("PANE_LOGGED");
     } finally {
       process.env.XDG_STATE_HOME = saved;
       if (saved === undefined) delete process.env.XDG_STATE_HOME;

@@ -45,6 +45,10 @@ export async function pipePaneTo(paneId: string, command: string): Promise<void>
   await runTmux(["pipe-pane", "-o", "-t", paneId, command]);
 }
 
+export async function paneHasPipe(paneId: string): Promise<boolean> {
+  return (await runTmux(["display-message", "-p", "-t", paneId, "#{pane_pipe}"])) === "1";
+}
+
 /** Keeps a pane that exits on screen with its status, so an `exit` condition can read it. */
 export async function keepPaneOnExit(paneId: string): Promise<void> {
   await runTmux(["set-option", "-p", "-t", paneId, "remain-on-exit", "on"]);

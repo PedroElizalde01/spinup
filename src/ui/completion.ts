@@ -6,10 +6,15 @@ export type FlagSpec = {
 
 export type Shell = "bash" | "zsh" | "fish";
 
+/**
+ * Written for bash 3.2, which macOS still ships: no mapfile, no associative arrays.
+ * The same function runs in zsh through bashcompinit.
+ */
 function bashScript(flags: FlagSpec[]): string {
   const words = flags.flatMap((flag) => [flag.long, ...(flag.short ? [flag.short] : [])]).join(" ");
 
   return `# spinup completion for bash. Load with:  eval "$(spinup --completion bash)"
+# shellcheck disable=SC2207
 _spinup_complete() {
   local cur prev command alias word
   cur="\${COMP_WORDS[COMP_CWORD]}"
@@ -36,22 +41,22 @@ _spinup_complete() {
 
   case "\${prev}" in
     -a|--action)
-      mapfile -t COMPREPLY < <(compgen -W "$(spinup --complete actions \${alias} 2>/dev/null)" -- "\${cur}")
+      COMPREPLY=($(compgen -W "$(spinup --complete actions \${alias:+"\${alias}"} 2>/dev/null)" -- "\${cur}"))
       return ;;
     --restart)
-      mapfile -t COMPREPLY < <(compgen -W "$(spinup --complete services \${alias} 2>/dev/null)" -- "\${cur}")
+      COMPREPLY=($(compgen -W "$(spinup --complete services \${alias:+"\${alias}"} 2>/dev/null)" -- "\${cur}"))
       return ;;
     --completion)
-      mapfile -t COMPREPLY < <(compgen -W "bash zsh fish" -- "\${cur}")
+      COMPREPLY=($(compgen -W "bash zsh fish" -- "\${cur}"))
       return ;;
   esac
 
   if [[ "\${cur}" == -* || -n "\${alias}" ]]; then
-    mapfile -t COMPREPLY < <(compgen -W "${words}" -- "\${cur}")
+    COMPREPLY=($(compgen -W "${words}" -- "\${cur}"))
     return
   fi
 
-  mapfile -t COMPREPLY < <(compgen -W "$(spinup --complete aliases 2>/dev/null)" -- "\${cur}")
+  COMPREPLY=($(compgen -W "$(spinup --complete aliases 2>/dev/null)" -- "\${cur}"))
 }
 
 complete -F _spinup_complete spinup

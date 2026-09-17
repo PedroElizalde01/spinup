@@ -78,7 +78,10 @@ describe("shell completion", () => {
 
       const binary = Bun.which(shell);
       if (!binary) continue;
-      const check = await execa(binary, ["-n"], { input: stdout, env, reject: false });
+      // A file, not stdin: fish 3.7 refuses to syntax-check from a pipe.
+      const file = path.join(root, `completion.${shell}`);
+      await writeFile(file, stdout);
+      const check = await execa(binary, ["-n", file], { env, reject: false });
       expect(`${shell} ${check.exitCode} ${check.stderr}`).toBe(`${shell} 0 `);
     }
   }, 30_000);
