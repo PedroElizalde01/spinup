@@ -126,3 +126,18 @@ describe("strict validation", () => {
     expect(parseConfig(`version: 1\n${body}`).version).toBe(1);
   });
 });
+
+describe("JSON Schema", () => {
+  test("the committed schema is generated from the runtime schema", async () => {
+    const { renderSchema } = await import("../scripts/build-schema.ts");
+    const committed = await Bun.file(new URL("../schema/spinup.schema.json", import.meta.url)).text();
+
+    expect(committed).toBe(renderSchema());
+  });
+
+  test("the schema rejects unknown keys like spinup does", async () => {
+    const schema = await Bun.file(new URL("../schema/spinup.schema.json", import.meta.url)).json();
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["name", "root", "default", "actions"]);
+  });
+});

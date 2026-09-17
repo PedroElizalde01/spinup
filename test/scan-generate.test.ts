@@ -276,6 +276,7 @@ describe("generated file", () => {
     const rendered = stringifyConfig(generateConfig(scan, "p", detection), generatedComments(detection));
 
     expect(rendered).toContain("# from package.json scripts.dev");
+    expect(rendered.split("\n")[0]).toBe("# yaml-language-server: $schema=https://raw.githubusercontent.com/PedroElizalde01/spinup/main/schema/spinup.schema.json");
     expect(rendered).toContain("version: 1");
   });
 });

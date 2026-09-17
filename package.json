@@ -24,7 +24,8 @@
   "devDependencies": {
     "@types/bun": "^1.4.2",
     "@types/node": "^22.10.1",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "zod-to-json-schema": "^3.24.6"
   },
   "license": "MIT"
 }

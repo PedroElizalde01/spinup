@@ -33,7 +33,7 @@ export function describeReady(condition: ReadyCondition): string {
 }
 
 /** localhost may be IPv4 or IPv6 depending on how the server bound; try both. */
-async function portOpen(port: number, host?: string): Promise<boolean> {
+export async function portOpen(port: number, host?: string): Promise<boolean> {
   const hosts = host ? [host] : ["127.0.0.1", "::1"];
 
   for (const candidate of hosts) {

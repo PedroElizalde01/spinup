@@ -11,13 +11,14 @@ import { listRegisteredProjects } from "./commands/list.ts";
 import { removeRegisteredProject } from "./commands/remove.ts";
 import { launchProject, runProject } from "./commands/run.ts";
 import { attachProject, restartProject, statusProject, stopProject } from "./commands/session.ts";
-import { loadProject } from "./commands/shared.ts";
+import { actionEntries, loadProject, selectAction } from "./commands/shared.ts";
 import { exitCodeFor, Interrupted } from "./core/executor.ts";
 import { updateBinary } from "./core/update.ts";
 import { EXIT, setJsonMode } from "./ui/output.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
 import { createShim, needsShimRefresh, reclaimLegacyShim } from "./core/shim.ts";
 import { banner } from "./ui/brand.ts";
+import { completionScript, type Shell } from "./ui/completion.ts";
 
 /**
  * Aliases registered before the format was enforced would otherwise report as
@@ -94,6 +95,8 @@ type CliOptions = {
   stop?: boolean;
   attach?: boolean;
   update?: boolean | string;
+  completion?: string;
+  complete?: string;
 };
 
 // `spinup | head` closes the pipe early; that is not an error worth a stack trace.
@@ -143,6 +146,9 @@ program
   .option("--stop", "end the tmux session")
   .option("--restart [service]", "restart one service in the tmux session, or the whole session")
   .option("--update [version]", "replace this binary with the latest release, or a named version, after verifying it")
+  .addOption(new Option("--completion <shell>", "print a shell completion script").choices(["bash", "zsh", "fish"]))
+  // Called by the completion scripts: prints one candidate per line.
+  .addOption(new Option("--complete <kind>").choices(["aliases", "actions", "services"]).hideHelp())
   .action(async (alias: string | undefined, options: CliOptions) => {
     await migrateRegistry();
     setJsonMode(Boolean(options.json));
@@ -161,6 +167,8 @@ program
       stop: options.stop,
       restart: options.restart,
       update: options.update,
+      completion: options.completion,
+      complete: options.complete,
     };
     const active = Object.entries(management)
       .filter(([, enabled]) => enabled)
@@ -177,7 +185,7 @@ program
       throw new Error("--json applies to --list, --plan, --graph, --env, --check, --doctor and --status.");
     }
 
-    const actionAware = ["start", "check", "doctor", "env", "graph", "plan", "status", "attach", "stop", "restart"];
+    const actionAware = ["start", "check", "doctor", "env", "graph", "plan", "status", "attach", "stop", "restart", "complete"];
 
     if (options.action && !actionAware.includes(primary)) {
       throw new Error("--action applies to launching, --plan, --graph, --env, --check, --doctor, --status, --attach, --stop and --restart.");
@@ -198,6 +206,33 @@ program
     if (primary === "help") {
       // Bare `spinup` is a request for orientation, not an error.
       program.outputHelp();
+      return;
+    }
+
+    if (primary === "completion") {
+      const flags = program.options
+        .filter((option) => !option.hidden && option.long)
+        .map((option) => ({ long: option.long!, short: option.short, description: option.description }));
+      process.stdout.write(completionScript(options.completion as Shell, flags));
+      return;
+    }
+
+    if (primary === "complete") {
+      // Completion must never print errors into the user's prompt.
+      try {
+        if (options.complete === "aliases") {
+          console.log(Object.keys(await listProjects()).sort().join("\n"));
+          return;
+        }
+
+        const project = await loadProject(alias);
+        const { action } = selectAction(project.config, options.action);
+        const names = options.complete === "actions" ? Object.keys(project.config.actions) : actionEntries(action).map((entry) => entry.name);
+        console.log(names.join("\n"));
+      } catch {
+        // Nothing to offer.
+      }
+
       return;
     }
 

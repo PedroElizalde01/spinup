@@ -11,6 +11,9 @@ import type { Action, Pane, SpinupConfig, Task, Window } from "../types/config.t
 /** The newest config format this build understands. */
 export const CURRENT_CONFIG_VERSION = 1;
 
+/** Stable until the site has a domain; the file is regenerated from the Zod schema. */
+export const SCHEMA_URL = "https://raw.githubusercontent.com/PedroElizalde01/spinup/main/schema/spinup.schema.json";
+
 // Validated without rewriting: a command is run exactly as written, so trimming
 // here would make validation and execution disagree.
 const nonblank = z.string().refine((value) => value.trim().length > 0, { message: "must not be blank" });
@@ -23,11 +26,22 @@ const envSchema = z.record(
   z.string(),
 );
 
-const timeoutSchema = z.number().int().positive().optional();
+const timeoutSchema = z.number().int().positive().optional().describe("Milliseconds to wait for the condition. Default 120000.");
 
 const readySchema = z.union([
-  z.object({ port: z.number().int().min(1).max(65535), host: nonblank.optional(), timeout: timeoutSchema }).strict(),
-  z.object({ http: z.string().url(), timeout: timeoutSchema }).strict(),
+  z
+    .object({
+      port: z.number().int().min(1).max(65535).describe("Ready once this TCP port accepts connections."),
+      host: nonblank.optional().describe("Host to connect to. Defaults to localhost over IPv4 and IPv6."),
+      timeout: timeoutSchema,
+    })
+    .strict(),
+  z
+    .object({
+      http: z.string().url().describe("Ready once this URL answers with any status below 500."),
+      timeout: timeoutSchema,
+    })
+    .strict(),
   z
     .object({
       log: nonblank.refine(
@@ -40,23 +54,28 @@ const readySchema = z.union([
           }
         },
         { message: "is not a valid regular expression" },
-      ),
+      ).describe("Ready once a line of the service's output matches this regular expression."),
       timeout: timeoutSchema,
     })
     .strict(),
-  z.object({ exit: z.literal(0), timeout: timeoutSchema }).strict(),
-]);
+  z
+    .object({
+      exit: z.literal(0).describe("Ready once the process exits successfully. For one-shot steps such as migrations."),
+      timeout: timeoutSchema,
+    })
+    .strict(),
+]).describe("When dependents may start. Without it, a service is ready once started plus its delay.");
 
 // Unknown keys are rejected: a misspelled `dependson` used to disappear silently and
 // the service simply started out of order.
 const runnableSchema = z
   .object({
-    name: nonblank,
-    cwd: nonblank,
-    cmd: nonblank,
-    dependsOn: z.array(nonblank).optional(),
-    delay: z.number().int().nonnegative().optional(),
-    env: envSchema.optional(),
+    name: nonblank.describe("Unique service name within the action. Used for panes, dependencies and --restart."),
+    cwd: nonblank.describe("Working directory, relative to the config's root."),
+    cmd: nonblank.describe("Shell command, run exactly as written."),
+    dependsOn: z.array(nonblank).optional().describe("Services that must be ready before this one starts."),
+    delay: z.number().int().nonnegative().optional().describe("Milliseconds to wait after this service is ready before its dependents start."),
+    env: envSchema.optional().describe("Environment variables for this service. They win over the shell and .env files."),
     ready: readySchema.optional(),
   })
   .strict();
@@ -66,15 +85,15 @@ const paneSchema: z.ZodType<Pane> = runnableSchema;
 
 const windowSchema: z.ZodType<Window> = z
   .object({
-    name: nonblank,
-    layout: nonblank.optional(),
-    panes: z.array(paneSchema).min(1),
+    name: nonblank.describe("tmux window name."),
+    layout: nonblank.optional().describe("tmux layout: even-horizontal, even-vertical, main-horizontal, main-vertical or tiled."),
+    panes: z.array(paneSchema).min(1).describe("One pane per service."),
   })
   .strict();
 
 const simpleActionSchema = z
   .object({
-    mode: z.literal("simple"),
+    mode: z.literal("simple").describe("Run every task as a foreground process with prefixed output."),
     // An action with nothing to run is a mistake, not an empty success.
     tasks: z.array(taskSchema).min(1, "must list at least one task"),
   })
@@ -82,7 +101,7 @@ const simpleActionSchema = z
 
 const tmuxActionSchema = z
   .object({
-    mode: z.literal("tmux"),
+    mode: z.literal("tmux").describe("Run services in panes of a tmux session spinup owns."),
     windows: z.array(windowSchema).min(1),
   })
   .strict();
@@ -147,7 +166,7 @@ function addGraphIssues(actionName: string, action: Action, ctx: z.RefinementCtx
 
 const actionSchema = z.discriminatedUnion("mode", [simpleActionSchema, tmuxActionSchema]);
 
-const configSchema = z
+export const configSchema = z
   .object({
     version: z
       .number()
@@ -156,11 +175,12 @@ const configSchema = z
       .refine((value) => value === undefined || value <= CURRENT_CONFIG_VERSION, {
         message: `is newer than this spinup understands (up to ${CURRENT_CONFIG_VERSION}); upgrade spinup`,
       })
-      .refine((value) => value === undefined || value >= 1, { message: "must be 1 or greater" }),
-    name: nonblank,
-    root: nonblank,
-    default: nonblank,
-    actions: z.record(nonblank, actionSchema),
+      .refine((value) => value === undefined || value >= 1, { message: "must be 1 or greater" })
+      .describe("Config format version. Omitted means 1."),
+    name: nonblank.describe("Project name. Used as the session name when no alias is registered."),
+    root: nonblank.describe("Directory every cwd and environment file resolves against, relative to this file."),
+    default: nonblank.describe("Action launched when none is selected with --action."),
+    actions: z.record(nonblank, actionSchema).describe("Named ways to run the project, such as dev, docker or prisma-migrate."),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -214,6 +234,8 @@ export function stringifyConfig(config: SpinupConfig, comments: Record<string, s
 
   // Comments go above each service of the default action, keyed by service name.
   const doc = new YAML.Document(parsed);
+  // Editors with the YAML language server read this and offer completion and validation.
+  doc.commentBefore = ` yaml-language-server: $schema=${SCHEMA_URL}`;
   const action = parsed.actions[parsed.default]!;
   const paths: Array<Array<string | number>> =
     action.mode === "tmux"

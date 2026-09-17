@@ -9,6 +9,8 @@ export type DockerComposeService = {
   dependsOn: string[];
   image?: string;
   profiles: string[];
+  /** Host ports the service publishes. Container-only and ranged ports are left out. */
+  ports: number[];
 };
 
 export type ComposeProject = {
@@ -28,11 +30,39 @@ const OVERRIDE_FILES = ["compose.override.yaml", "compose.override.yml", "docker
 // Resolution is a local file operation; it must never hold up a scan.
 const COMPOSE_CONFIG_TIMEOUT_MS = 5000;
 
+type ComposePort = string | number | { published?: string | number };
+
 type ComposeServiceDefinition = {
   image?: string;
   depends_on?: string[] | Record<string, unknown>;
   profiles?: string[];
+  ports?: ComposePort[];
 };
+
+/**
+ * "5432:5432", "127.0.0.1:8080:80/tcp" and { published: 5432 } publish a host port.
+ * "3000" alone publishes a random one, and a range cannot be checked meaningfully.
+ */
+function hostPorts(ports: ComposePort[] | undefined): number[] {
+  const found: number[] = [];
+
+  for (const entry of ports ?? []) {
+    let published: string | undefined;
+
+    if (typeof entry === "object") {
+      published = entry.published === undefined ? undefined : String(entry.published);
+    } else {
+      const parts = String(entry).split("/")[0]!.split(":");
+      published = parts.length >= 2 ? parts[parts.length - 2] : undefined;
+    }
+
+    if (published && /^\d+$/.test(published)) {
+      found.push(Number(published));
+    }
+  }
+
+  return found;
+}
 
 type ComposeDocument = {
   services?: Record<string, ComposeServiceDefinition | null>;
@@ -53,6 +83,7 @@ function toServices(document: ComposeDocument | undefined): DockerComposeService
       dependsOn: normalizeDependsOn(definition?.depends_on),
       image: definition?.image,
       profiles: definition?.profiles ?? [],
+      ports: hostPorts(definition?.ports),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }

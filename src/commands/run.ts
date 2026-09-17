@@ -20,6 +20,7 @@ import { generateConfig, generatedComments } from "../core/generator.ts";
 import { confirmAction, promptForCommand } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
+import { claimedPorts, describeBusyPort, findBusyPorts } from "../core/ports.ts";
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
 import { colorEnabled } from "../ui/output.ts";
 import { buildExecutionPlan, renderExecutionPlan } from "./doctor.ts";
@@ -610,6 +611,12 @@ export async function launchProject(alias: string, projectRoot: string, options:
 
     if (action.mode === "tmux") {
       console.log(`\ntmux session: ${sessionNameFor(alias, config, actionName)}`);
+    }
+
+    const busy = await findBusyPorts(await claimedPorts(projectRoot, path.resolve(projectRoot, config.root), action));
+
+    for (const port of busy) {
+      console.log(`[ports] ${describeBusyPort(port)}`);
     }
 
     console.log("\n[dry-run] nothing was started");

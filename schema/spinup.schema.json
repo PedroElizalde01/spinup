@@ -1,0 +1,361 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/PedroElizalde01/spinup/main/schema/spinup.schema.json",
+  "title": "spinup project configuration (.spinup.yml)",
+  "description": "Dependency cycles, unknown dependencies, duplicate service names and the default action existing are checked by spinup itself; run `spinup --doctor`.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Config format version. Omitted means 1."
+    },
+    "name": {
+      "type": "string",
+      "description": "Project name. Used as the session name when no alias is registered."
+    },
+    "root": {
+      "type": "string",
+      "description": "Directory every cwd and environment file resolves against, relative to this file."
+    },
+    "default": {
+      "type": "string",
+      "description": "Action launched when none is selected with --action."
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "const": "simple",
+                "description": "Run every task as a foreground process with prefixed output."
+              },
+              "tasks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Unique service name within the action. Used for panes, dependencies and --restart."
+                    },
+                    "cwd": {
+                      "type": "string",
+                      "description": "Working directory, relative to the config's root."
+                    },
+                    "cmd": {
+                      "type": "string",
+                      "description": "Shell command, run exactly as written."
+                    },
+                    "dependsOn": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Services that must be ready before this one starts."
+                    },
+                    "delay": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Milliseconds to wait after this service is ready before its dependents start."
+                    },
+                    "env": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "propertyNames": {
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                      },
+                      "description": "Environment variables for this service. They win over the shell and .env files."
+                    },
+                    "ready": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "port": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 65535,
+                              "description": "Ready once this TCP port accepts connections."
+                            },
+                            "host": {
+                              "type": "string",
+                              "description": "Host to connect to. Defaults to localhost over IPv4 and IPv6."
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "description": "Milliseconds to wait for the condition. Default 120000."
+                            }
+                          },
+                          "required": [
+                            "port"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "http": {
+                              "type": "string",
+                              "format": "uri",
+                              "description": "Ready once this URL answers with any status below 500."
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "description": "Milliseconds to wait for the condition. Default 120000."
+                            }
+                          },
+                          "required": [
+                            "http"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "log": {
+                              "type": "string",
+                              "description": "Ready once a line of the service's output matches this regular expression."
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "description": "Milliseconds to wait for the condition. Default 120000."
+                            }
+                          },
+                          "required": [
+                            "log"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "exit": {
+                              "type": "number",
+                              "const": 0,
+                              "description": "Ready once the process exits successfully. For one-shot steps such as migrations."
+                            },
+                            "timeout": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "description": "Milliseconds to wait for the condition. Default 120000."
+                            }
+                          },
+                          "required": [
+                            "exit"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ],
+                      "description": "When dependents may start. Without it, a service is ready once started plus its delay."
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "cwd",
+                    "cmd"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "mode",
+              "tasks"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "const": "tmux",
+                "description": "Run services in panes of a tmux session spinup owns."
+              },
+              "windows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "tmux window name."
+                    },
+                    "layout": {
+                      "type": "string",
+                      "description": "tmux layout: even-horizontal, even-vertical, main-horizontal, main-vertical or tiled."
+                    },
+                    "panes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "Unique service name within the action. Used for panes, dependencies and --restart."
+                          },
+                          "cwd": {
+                            "type": "string",
+                            "description": "Working directory, relative to the config's root."
+                          },
+                          "cmd": {
+                            "type": "string",
+                            "description": "Shell command, run exactly as written."
+                          },
+                          "dependsOn": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Services that must be ready before this one starts."
+                          },
+                          "delay": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Milliseconds to wait after this service is ready before its dependents start."
+                          },
+                          "env": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "propertyNames": {
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                            },
+                            "description": "Environment variables for this service. They win over the shell and .env files."
+                          },
+                          "ready": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "port": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 65535,
+                                    "description": "Ready once this TCP port accepts connections."
+                                  },
+                                  "host": {
+                                    "type": "string",
+                                    "description": "Host to connect to. Defaults to localhost over IPv4 and IPv6."
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "description": "Milliseconds to wait for the condition. Default 120000."
+                                  }
+                                },
+                                "required": [
+                                  "port"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "http": {
+                                    "type": "string",
+                                    "format": "uri",
+                                    "description": "Ready once this URL answers with any status below 500."
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "description": "Milliseconds to wait for the condition. Default 120000."
+                                  }
+                                },
+                                "required": [
+                                  "http"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "log": {
+                                    "type": "string",
+                                    "description": "Ready once a line of the service's output matches this regular expression."
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "description": "Milliseconds to wait for the condition. Default 120000."
+                                  }
+                                },
+                                "required": [
+                                  "log"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "exit": {
+                                    "type": "number",
+                                    "const": 0,
+                                    "description": "Ready once the process exits successfully. For one-shot steps such as migrations."
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "description": "Milliseconds to wait for the condition. Default 120000."
+                                  }
+                                },
+                                "required": [
+                                  "exit"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ],
+                            "description": "When dependents may start. Without it, a service is ready once started plus its delay."
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "cwd",
+                          "cmd"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "minItems": 1,
+                      "description": "One pane per service."
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "panes"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "mode",
+              "windows"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "description": "Named ways to run the project, such as dev, docker or prisma-migrate."
+    }
+  },
+  "required": [
+    "name",
+    "root",
+    "default",
+    "actions"
+  ],
+  "additionalProperties": false
+}
