@@ -1,5 +1,8 @@
 # Spinup reliability implementation handoff
 
+> **Historical record.** Written on 2026-09-06 as the implementation brief for M1–M4. All
+> findings it lists were closed by v0.5.0; current status is in [SPINUP_PLAN.md](SPINUP_PLAN.md).
+
 ## 1. Purpose and verified baseline
 
 This is my recommended implementation plan for another coding agent. It covers all 23 findings from `RUNIT_REVIEW.md`, the six findings from the follow-up review, and the additional config-permission regression. It describes work to do, not fixes already implemented.

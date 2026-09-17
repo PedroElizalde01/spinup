@@ -161,7 +161,7 @@ code has landed. "Partial" means part of the acceptance criteria is met.
 |---|---|---|---|
 | F21 | No native macOS/ARM execution in CI, tests not typechecked, mutable action tags | **Fixed 2026-09-17** | Add `macos-14` (arm64) and `macos-13` (x64) smoke jobs running the built binary. `tsconfig.test.json` with `bun-types`, `tsc -p` in CI. Pin `upload-artifact`, `download-artifact`, `action-gh-release` to SHAs. |
 | F22 | No checksum verification, non-atomic replace, no libc check, bad option-arg errors | **Fixed 2026-09-17** | Checksums, staged atomic install, musl builds and detection, option validation, version check of the staged binary. |
-| F23 | README rename paragraph wrong, examples incomplete, remediation table stale | **Mostly fixed 2026-09-17** (docs/ with validated examples; RUNIT_REVIEW.md remediation table still historical) | Fix B03. Add working simple, multi-window, and mixed examples exercised by a test. Update remediation ledger in `RUNIT_REVIEW.md` §11 with exact scope. |
+| F23 | README rename paragraph wrong, examples incomplete, remediation table stale | **Fixed 2026-09-17** | docs/ with validated examples; RUNIT_REVIEW.md and the handoff are marked historical and point here. |
 
 ### 3.5 New defects found today (N)
 
@@ -172,7 +172,7 @@ code has landed. "Partial" means part of the acceptance criteria is met.
 | N03 | ~~stdout/stderr mixing~~ | done `60a4b11` | `src/ui/output.ts` `emit()`; migration notices stay on stderr. |
 | N04 | ~~`--interactive` prompts are invoked without checking `process.stdin.isTTY`~~ | done `cad0c09` | |
 | N05 | ~~no version field~~ | done `53ceab6` | `version: 1` written; newer refused. |
-| N06 | `bun test` prints `[tmux] attach manually with: tmux attach -t api` from a real launch path during tests | `test/tmux-workspace.test.ts` | Tests run on a private socket, so harmless, but silence by asserting on captured output instead of letting it reach the runner's stdout. |
+| N06 | ~~`bun test` prints launch progress lines~~ | done 2026-09-17 | `test/setup.ts` preload silences console.log; `SPINUP_TEST_VERBOSE=1` shows it. |
 | N07 | Website has no `robots.txt`, `sitemap`, OG image, or canonical URL | `app/` | See W14–W17. |
 | N08 | ~~Website `tsconfig.tsbuildinfo` is committed~~ | done `2f069e2` | |
 
@@ -239,10 +239,10 @@ acceptance check. Items marked "P##" map to review proposals.
 
 | ID | Cut |
 |---|---|
-| C2 | Blank-command autofix in `src/commands/edit.ts` is unreachable after strict validation. Remove with F17. |
-| C3 | `Task` and `Pane` are identical shapes. One `Runnable` type, two aliases. Do with B05. |
-| C4 | Unused `expandHome`, `collectDependencies`, `hasSrc`/`hasAppDir`/`hasServerDir`. Remove after `grep` confirms no callers. |
-| C5 | `src/types/inquirer-prompts.d.ts` overrides shipped types. Delete unless a compile error proves it is needed. |
+| C2 ✓ | Blank-command autofix is gone (removed with strict validation). |
+| C3 ✓ | `Pane` is an alias of `Task`; one runnable schema serves both. |
+| C4 ✓ | `expandHome`, `collectDependencies` and the unused scan flags are removed. |
+| C5 ✓ | The local `@inquirer/prompts` type override is deleted; shipped types are used. |
 
 ---
 
@@ -322,7 +322,272 @@ Resolved 2026-09-16.
 | Q1 | Brand mark | **Change it.** Replace the "r" glyph with a new S mark, same circle and 20px stroke. One SVG for CLI favicon, site icon, OG image. |
 | Q2 | Rename GitHub repos | **Done 2026-09-16.** `spinup` and `spinup-front`; installer, README and website URLs updated. |
 | Q3 | Website terminal art | **Match the CLI.** Revert the uncommitted ASCII diff, keep Unicode box-drawing and `✓`, render the SPINUP glyph and `spinup my-app` exactly as the CLI prints them (W04, W09, W18). Fix Windows font fallback in CSS. |
-| Q4 | npm publish | **Not yet.** E24 npm channel deferred. Homebrew tap and installer remain. |
+| Q4 | npm publish | **Not yet.** `spinup` on npm is an unrelated package (created 2014, last published 2018, owner `jaz303`). `spinup-cli` and scoped names are free. See M6 §9.6. |
 | Q5 | Docs location | **`docs/` in the CLI repo**, site consumes at build (W14). |
 | Q6 | Domain | **Deferred.** W17 (OG/canonical) and the hosted schema URL (E17, W21) wait on it. Ship the schema in the release assets meanwhile and reference it by GitHub raw URL. |
 | Q7 | Readiness | **Native** conditions (`port`, `http`, `exit`, `log`). No Process Compose dependency. |
+
+---
+
+## 9. M6 plan: remaining features
+
+Written 2026-09-17, after v0.5.0. Every item in this section is **planned, not built**.
+The order puts real-world validation first, because every feature so far was tested
+only against fixture projects.
+
+### 9.0 Order and releases
+
+| Step | Items | Release | Why this position |
+|---|---|---|---|
+| 0 | A8 dogfood on 3–5 real projects, A10 one Mac install | patch releases as needed | Real repositories will expose detection and lifecycle gaps faster than any feature. Fixes found here outrank everything below. |
+| 1 | E18 personal overrides, E15 runtime versions | **v0.6.0** | The two features that change daily and team use. Both touch config loading and `--check`, so they land together. |
+| 2 | W19 accessibility, W20 color scheme | website, no CLI release | Independent of the CLI; small. |
+| 3 | E24 Homebrew live (A15), AUR `spinup-bin` | **v0.6.x** | Channels, once there is a release worth distributing more widely. |
+| 4 | E27 crash reports | v0.7.0, optional | Only valuable once people other than the author use it. |
+| — | E19 config migrations | with the first format change | Build the mechanism when a `version: 2` exists, not before. The policy is defined now. |
+| — | W17 SEO/sharing, W21 schema hosting | when Q6 (domain) is decided | Blocked. |
+
+### 9.1 E18: personal overrides (`.spinup.local.yml`)
+
+**Problem.** `.spinup.yml` is committed and shared. Today a developer who needs a
+different port, an extra debug flag or one more service must edit the shared file and
+avoid committing it.
+
+**Design.**
+
+- **File.** A git-ignored `.spinup.local.yml` next to the shared config. Its narrow
+  schema is strict, like the main one:
+
+  ```yaml
+  # yaml-language-server: $schema=.../schema/spinup.local.schema.json
+  default: dev-debug            # optional: personal default action
+  env:                          # every service of every action
+    LOG_LEVEL: debug
+  actions:
+    dev:
+      services:
+        api:                    # must name an existing service
+          env: { PORT: "4001" }
+          cmd: npm run dev -- --inspect
+          ready: { port: 4001 }
+      disable: [worker]         # leave these services out
+      add:                      # extra services: tasks, or panes in a "local" window
+        - name: storybook
+          cwd: apps/web
+          cmd: npm run storybook
+  ```
+- **What can be changed.** `cmd`, `cwd`, `env`, `ready` and `delay` per service.
+  Services can be disabled or added. Structure beyond that (mode, windows, new actions)
+  stays in the shared file, so the team's config remains the source of truth.
+- **Merge order.** Shared config, then local overlay, then strict validation of the
+  result. Validation also rejects a local reference to a missing service or action, a
+  disabled service others depend on, and duplicate added names. Errors name the
+  file: `.spinup.local.yml: actions.dev.services.apii does not exist`.
+- **Environment precedence, highest first.** Local service `env`, shared service
+  `env`, local top-level `env`, invoking shell, environment files.
+- **Two loaders instead of one.**
+  - `loadEffectiveConfig` is used by launch, `--plan`, `--graph`, `--env`,
+    `--check`, `--doctor`, `--status`, `--restart`, completion and `--dry-run`.
+  - `loadSharedConfig` is used by `--edit`, `--edit --interactive`, `--regenerate`,
+    `--init` and `--relink`, which must never write local values into the shared file.
+
+  Each call site is changed explicitly, and a test enumerates the commands so a new
+  one cannot silently pick the wrong loader.
+- **Visibility.**
+  - `--plan` and `--graph` mark overridden values with `(local)`.
+  - `--json` adds `overrides: ["actions.dev.services.api.env.PORT", ...]`.
+  - `--doctor` lists the overlay and warns when git tracks `.spinup.local.yml` or
+    does not ignore it (`git check-ignore`), because it may hold secrets.
+- **Commands.**
+  - `spinup <alias> --edit --local` opens the overlay, creating a commented template
+    if it does not exist.
+  - `--regenerate`'s preview warns when the overlay names services the new config
+    no longer has.
+- **Schema.** `schema/spinup.local.schema.json`, generated and drift-tested like the
+  main one.
+
+**Files.** `src/core/config.ts` (overlay schema, merge, two loaders),
+`src/types/config.ts`, every command in `src/commands/`, `scripts/build-schema.ts`,
+`docs/configuration.md`, and tests.
+
+**Acceptance.**
+- Overridden env, cmd, ready and delay reach both backends.
+- Disable and add work in simple and tmux modes.
+- Each validation error names the overlay path.
+- A local-only secret never appears in `--plan`, `--json`, the shared file, or a
+  regenerate preview.
+- `--edit --interactive` on a project with an overlay leaves the shared file free of
+  local values.
+- `--doctor` warns for a tracked overlay.
+
+**Risks.** Two sources of truth confuse people unless `--plan` shows provenance, so
+provenance is part of acceptance, not a follow-up. A disabled service that is a
+dependency must fail loudly, not start its dependents without it.
+
+**Size.** About 2–3 days including tests.
+
+### 9.2 E15: runtime version checks
+
+**Problem.** A project declares Node 20 in `.nvmrc`, but the PATH has Node 22. Services
+start and fail in confusing ways, or behave differently than for teammates.
+
+**Design.**
+
+- **Declarations read from each selected service's `cwd`, walking up to the project
+  root.**
+
+  | Tool | Sources, first found wins |
+  |---|---|
+  | node | `.nvmrc`, `.node-version`, `.tool-versions` (nodejs), `mise.toml` / `.mise.toml` `[tools] node`, `package.json` `engines.node` |
+  | python | `.python-version`, `.tool-versions`, `mise.toml`, `pyproject.toml` `requires-python` |
+  | go | `go.mod` `go` / `toolchain`, `.tool-versions` (golang), `mise.toml` |
+  | ruby | `.ruby-version`, `.tool-versions`, `mise.toml`, `Gemfile` `ruby` |
+  | java | `.tool-versions`, `mise.toml`, `.sdkmanrc` |
+  | bun, deno | `.tool-versions`, `mise.toml`, `package.json` `engines.bun` |
+  | rust | `rust-toolchain.toml` / `rust-toolchain` |
+
+- **What is compared.** The version of the executable the service would actually
+  run. It is probed with the launch environment's PATH and from the service's `cwd`,
+  so mise, asdf and nvm shims resolve the way they will at launch. Probes run with a
+  timeout, only for tools the selected action's commands need (reusing
+  `inferRequiredTools`).
+- **Matching.**
+  - A version file with a partial version (`20`, `20.11`) matches as a prefix.
+  - A range (`engines`, `requires-python`) uses `Bun.semver.satisfies`, so no new
+    dependency is needed.
+  - Aliases such as `lts/*`, `latest` and `system` are reported as "not checked",
+    never as a mismatch.
+- **Reporting.**
+  - `--check` and `--doctor` add a runtimes section: tool, declared value and its
+    source, found version, and result.
+  - A mismatch is a problem (exit 2); an unparseable declaration is a note.
+  - `--json` gains `runtimes`.
+  - When a mise or asdf file declares the tool but it is missing, the hint is
+    `mise install` or `asdf install`. Nothing is ever installed automatically.
+- **Launch.** A one-line warning before starting, never a block, so a check that is
+  wrong in an edge case cannot stop anyone working.
+
+**Files.** New `src/core/runtimes.ts`; `src/commands/check.ts`, `doctor.ts`,
+`run.ts` (launch warning); `docs/commands.md`; tests using fake `node`, `python3` and
+`go` scripts on a temporary PATH.
+
+**Acceptance.**
+- `.nvmrc` `20` with Node 22 on PATH fails `--check` with both versions and the source
+  file.
+- `engines: ">=18"` with Node 22 passes.
+- `lts/*` is not checked.
+- A `.tool-versions` in a parent directory applies to a nested service.
+- The probe runs in the service's directory, verified with a fake shim that prints
+  different versions per directory.
+- No probe for a tool the action does not use.
+
+**Risks.**
+- Version managers that hook the shell, such as nvm without shims, resolve
+  differently in a non-interactive probe. This is documented as a known limit and
+  reported as "not checked", not as a mismatch.
+- Probe time adds up across many services, so probes are deduplicated by
+  (tool, cwd-with-same-declaration).
+
+**Size.** About 2 days.
+
+### 9.3 E19: config migrations (policy now, code later)
+
+**Policy.**
+- `version` increases only for a change that makes an existing valid file invalid or
+  changes its meaning.
+- A new optional field does not bump it.
+- Every bump ships with:
+  - a migration that operates on the YAML document, so comments survive
+  - a `docs/upgrading.md` entry
+  - fixture files for the old version that must migrate and validate
+
+**Mechanism, built with the first bump.**
+- Loading an older file migrates it in memory and prints one note:
+  `config is version 1; spinup --migrate-config updates the file`.
+- `--migrate-config` shows the same structured preview as `--regenerate`, writes the
+  private `.bak` file, and patches the document.
+- A newer file than the binary understands keeps failing with the upgrade message, as
+  it does today.
+
+### 9.4 W19: website accessibility pass
+
+- Keyboard:
+  - a skip-to-content link
+  - visible `:focus-visible` styles on nav links, copy buttons, pane selector buttons
+    and the docs sidebar
+  - no keyboard traps in the terminal scene
+- Screen readers:
+  - the terminal animation stays `aria-hidden`, with one static text summary instead
+    of per-frame updates
+  - copy buttons announce "copied" through a polite live region
+  - tables keep header cells
+  - the docs sidebar marks the current page (done)
+- Motion:
+  - `prefers-reduced-motion` stops the hero entry animation, section reveal and
+    caret blink everywhere, not only in the terminal
+- Contrast:
+  - measure `--soft` text and 0.69rem pane titles against their backgrounds, and
+    raise anything under 4.5:1 (3:1 for large text)
+- Verification:
+  - axe-core in headless Chrome against `/`, `/install`, `/changelog` and one docs
+    page, with zero serious or critical violations
+  - Lighthouse accessibility score of at least 95
+  - a manual keyboard pass
+
+**Size.** About 1 day.
+
+### 9.5 W20: color scheme (decision needed)
+
+**Recommendation: commit to dark.** The brand is a dark terminal aesthetic, and a light
+palette doubles the visual QA for every component. Implementation:
+- `color-scheme: dark` on `:root` and a `viewport.colorScheme` of `dark`, so form
+  controls, scrollbars and the page before CSS loads match
+- `theme-color` meta for mobile browser chrome
+
+**Alternative.** A full light theme through token swaps under `prefers-color-scheme:
+light`, about 1–2 days plus screenshot review of every page.
+
+### 9.6 E24: package channels
+
+| Channel | Status | What it takes | Recommendation |
+|---|---|---|---|
+| Install script | live | — | Primary channel. |
+| Homebrew tap | ready, needs A15 | Create `PedroElizalde01/homebrew-spinup`, add `HOMEBREW_TAP_TOKEN`; the release job commits the formula. | Do it now; zero ongoing work. |
+| AUR `spinup-bin` | not started; name free | An AUR account with SSH key (user action), a PKGBUILD with x86_64 and aarch64 sources and checksums from SHA256SUMS, and a release job pushing to the AUR git repo with an `AUR_SSH_KEY` secret. | Do after Homebrew; about half a day once the account exists. |
+| mise / ubi | likely works today | `mise use -g github:PedroElizalde01/spinup` picks release assets by OS and architecture. | Test once and document if it works; no code. |
+| npm | blocked on name | `spinup` belongs to an unrelated package (last published 2018). Either request a transfer through npm's name dispute process, or publish scoped (for example `@pedroelizalde01/spinup`) using per-platform optional dependency packages plus a small launcher, like esbuild and biome. That means 7 packages per release and an `NPM_TOKEN`. | Keep deferred (Q4). Revisit only if users ask for `npx`. |
+
+### 9.7 E27: local crash reports (optional)
+
+- Only unexpected errors count as crashes: `TypeError`, `RangeError`,
+  `ReferenceError`, and anything thrown outside spinup's own error messages. User
+  errors keep today's one-line messages.
+- **On a crash, by default:** print one line saying it looks like a bug, with the
+  issue URL. Nothing is written to disk.
+- **With `SPINUP_CRASH_REPORT=1`:** also write
+  `$XDG_STATE_HOME/spinup/crash/<timestamp>.json` with:
+  - version, platform and architecture, Bun version
+  - the command's flag names, but no values, aliases or paths
+  - the stack trace, with the home directory replaced by `~`
+
+  Never environment variables, config contents or project paths.
+- Spinup never makes a network call for this. The user attaches the file to an issue.
+
+**Size.** About half a day.
+
+### 9.8 Blocked on the domain (Q6)
+
+- **W17.** `metadataBase`, OpenGraph and Twitter cards, an OG image generated with the
+  wordmark, `robots.ts`, `sitemap.ts` and canonical URLs.
+- **W21.** Serve `schema/*.json` from the domain under a versioned, immutable path,
+  and switch the modeline URL. Keep the GitHub raw URL working, because existing files
+  reference it.
+
+### 9.9 Open questions for M6
+
+| ID | Question | Recommendation |
+|---|---|---|
+| Q8 | Dark-only website, or add a light theme? | Dark-only, made explicit (W20). |
+| Q9 | May `.spinup.local.yml` add services, or only override existing ones? | Allow add and disable; people commonly want an extra local-only service (storybook, a tunnel). |
+| Q10 | Should a runtime version mismatch fail `--check` (exit 2) or only warn? | Fail `--check` and `--doctor`, warn on launch. |
+| Q11 | npm: dispute the `spinup` name, publish scoped, or skip? | Skip for now. |

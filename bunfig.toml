@@ -1,1 +1,4 @@
 # Bun configuration for spinup.
+
+[test]
+preload = ["./test/setup.ts"]

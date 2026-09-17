@@ -1,5 +1,11 @@
 # RUNIT: codebase review, research, and improvement plan
 
+> **Historical record.** This review was written against runit v0.2.2 on 2026-09-06, before
+> the rename to spinup. Its findings, evidence and remediation table describe that point in
+> time and are kept unchanged as evidence. Current status of every finding (F01–F23, R1–R7)
+> and the roadmap live in [SPINUP_PLAN.md](SPINUP_PLAN.md); user documentation is in
+> [docs/](docs/). Every finding in this review was closed by v0.5.0.
+
 Reviewed on **2026-09-06**, against commit `c5389074a0b3a42d7ace4ed0f00f9c986675af70`, version **0.2.2**.
 
 ## 1. Recommendations
@@ -646,6 +652,9 @@ This does **not** overturn F01's recommendation to keep quoted wrappers for now.
 ## 11. Remediation progress
 
 Updated 2026-09-06. Each row was reproduced before the change and re-verified after.
+
+> Superseded: this table stops at 2026-09-06 and marks some partial fixes as complete. The
+> authoritative status is the defect ledger in [SPINUP_PLAN.md](SPINUP_PLAN.md) §3.
 
 | Finding | Status | Commit | Evidence |
 |---|---|---|---|

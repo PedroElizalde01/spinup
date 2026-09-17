@@ -1,18 +1,6 @@
 import { homedir } from "node:os";
 import path from "node:path";
 
-export function expandHome(inputPath: string): string {
-  if (inputPath === "~") {
-    return homedir();
-  }
-
-  if (inputPath.startsWith("~/")) {
-    return path.join(homedir(), inputPath.slice(2));
-  }
-
-  return inputPath;
-}
-
 /**
  * The XDG spec requires absolute paths and says a relative value must be ignored,
  * so a stray relative override falls back to the default rather than resolving
