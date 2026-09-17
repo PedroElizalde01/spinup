@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -378,7 +378,7 @@ describe("registration and removal stay consistent across files", () => {
   test("concurrent registrations from separate processes leave one wrapper and one entry", async () => {
     const { configHome, shimDir } = await isolate();
     const { execa } = await import("execa");
-    const project = await makeTempDir("spinup-project-");
+    const project = await realpath(await makeTempDir("spinup-project-"));
     tempDirs.push(project);
 
     const runs = await Promise.all(

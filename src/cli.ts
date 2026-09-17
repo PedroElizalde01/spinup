@@ -13,6 +13,7 @@ import { launchProject, runProject } from "./commands/run.ts";
 import { attachProject, restartProject, statusProject, stopProject } from "./commands/session.ts";
 import { loadProject } from "./commands/shared.ts";
 import { exitCodeFor, Interrupted } from "./core/executor.ts";
+import { updateBinary } from "./core/update.ts";
 import { EXIT, setJsonMode } from "./ui/output.ts";
 import { isCanonicalAlias, listProjects, migrateLegacyAliases } from "./core/registry.ts";
 import { createShim, needsShimRefresh, reclaimLegacyShim } from "./core/shim.ts";
@@ -92,6 +93,7 @@ type CliOptions = {
   status?: boolean;
   stop?: boolean;
   attach?: boolean;
+  update?: boolean | string;
 };
 
 // `spinup | head` closes the pipe early; that is not an error worth a stack trace.
@@ -140,6 +142,7 @@ program
   .option("--attach", "attach to the running tmux session")
   .option("--stop", "end the tmux session")
   .option("--restart [service]", "restart one service in the tmux session, or the whole session")
+  .option("--update [version]", "replace this binary with the latest release, or a named version, after verifying it")
   .action(async (alias: string | undefined, options: CliOptions) => {
     await migrateRegistry();
     setJsonMode(Boolean(options.json));
@@ -157,6 +160,7 @@ program
       attach: options.attach,
       stop: options.stop,
       restart: options.restart,
+      update: options.update,
     };
     const active = Object.entries(management)
       .filter(([, enabled]) => enabled)
@@ -194,6 +198,20 @@ program
     if (primary === "help") {
       // Bare `spinup` is a request for orientation, not an error.
       program.outputHelp();
+      return;
+    }
+
+    if (primary === "update") {
+      // A compiled binary runs from Bun's embedded filesystem; anything else is a checkout.
+      if (!Bun.main.startsWith("/$bunfs/") && !Bun.main.includes("~BUN")) {
+        throw new Error("This spinup runs from source. Update the checkout with git pull instead.");
+      }
+
+      await updateBinary({
+        currentVersion: packageJson.version,
+        executablePath: process.execPath,
+        requested: typeof options.update === "string" ? options.update : undefined,
+      });
       return;
     }
 

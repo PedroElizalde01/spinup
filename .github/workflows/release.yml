@@ -10,67 +10,217 @@ on:
 permissions:
   contents: read
 
+env:
+  BUN_VERSION: "1.3.9"
+
 jobs:
   verify:
     name: Typecheck, test, audit
     uses: ./.github/workflows/ci.yml
 
+  version:
+    name: Tag matches package.json
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Compare
+        run: |
+          version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' package.json)"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package.json version ${version}" >&2
+            exit 1
+          fi
+
   build:
-    name: Build ${{ matrix.asset_name }}
+    name: Build ${{ matrix.asset }}
     runs-on: ubuntu-latest
     needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
-          - asset_name: spinup-linux-x64
-            build_target: bun-linux-x64-baseline
-          # install.sh already resolves linux/arm64; without this the asset 404s.
-          - asset_name: spinup-linux-arm64
-            build_target: bun-linux-arm64
-          - asset_name: spinup-darwin-x64
-            build_target: bun-darwin-x64
-          - asset_name: spinup-darwin-arm64
-            build_target: bun-darwin-arm64
+          - asset: spinup-linux-x64
+            target: bun-linux-x64-baseline
+          - asset: spinup-linux-arm64
+            target: bun-linux-arm64
+          - asset: spinup-linux-x64-musl
+            target: bun-linux-x64-musl
+          - asset: spinup-linux-arm64-musl
+            target: bun-linux-arm64-musl
+          - asset: spinup-darwin-x64
+            target: bun-darwin-x64
+          - asset: spinup-darwin-arm64
+            target: bun-darwin-arm64
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.3.9"
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build standalone binary
-        shell: bash
-        run: bash scripts/build-release.sh --target "${{ matrix.build_target }}" --output "dist/${{ matrix.asset_name }}"
+      - name: Build
+        run: bash scripts/build-release.sh --target "${{ matrix.target }}" --output "dist/${{ matrix.asset }}"
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
+
+  man:
+    name: Build man page
+    runs-on: ubuntu-latest
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Render
+        run: |
+          bun install --frozen-lockfile
+          mkdir -p dist
+          bun run scripts/build-man.ts > dist/spinup.1
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: spinup.1
+          path: dist/spinup.1
+          if-no-files-found: error
+
+  # The published files themselves, on the machines they are published for. Cross
+  # compiling on Linux proves nothing about whether a macOS or ARM binary starts.
+  smoke:
+    name: Smoke ${{ matrix.asset }} on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: spinup-linux-x64
+            runner: ubuntu-latest
+            arch: x86_64
+          - asset: spinup-linux-arm64
+            runner: ubuntu-24.04-arm
+            arch: aarch64
+          - asset: spinup-linux-x64-musl
+            runner: ubuntu-latest
+            arch: x86_64
+            alpine: true
+          - asset: spinup-linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            arch: aarch64
+            alpine: true
+          - asset: spinup-darwin-x64
+            runner: macos-15-intel
+            arch: x86_64
+          - asset: spinup-darwin-arm64
+            runner: macos-15
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ matrix.asset }}
+          path: dist
+
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+
+      - name: Smoke
+        run: |
+          chmod +x "dist/${{ matrix.asset }}"
+          version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' package.json)"
+          if [ "${{ matrix.alpine }}" = "true" ]; then
+            docker run --rm -v "${PWD}:/work" -w /work alpine:3.20 \
+              sh -c "apk add --no-cache bash libstdc++ libgcc >/dev/null && bash scripts/smoke.sh dist/${{ matrix.asset }} ${version}"
+          else
+            bash scripts/smoke.sh "dist/${{ matrix.asset }}" "${version}"
+          fi
 
   publish:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [version, smoke, man]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+      # Build provenance is signed with the workflow's OIDC identity.
+      id-token: write
+      attestations: write
 
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
 
-      - name: Publish release assets
-        uses: softprops/action-gh-release@v2
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum spinup-* spinup.1 > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.2.0
+        with:
+          subject-path: |
+            dist/spinup-*
+            dist/spinup.1
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: dist/*
           generate_release_notes: true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: SHA256SUMS
+          path: dist/SHA256SUMS
+
+  homebrew:
+    name: Update Homebrew tap
+    runs-on: ubuntu-latest
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: SHA256SUMS
+          path: dist
+
+      # Needs a fine-grained token with contents:write on PedroElizalde01/homebrew-spinup,
+      # stored as the HOMEBREW_TAP_TOKEN secret. Without it the release still succeeds.
+      - name: Commit the formula
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew tap update."
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/PedroElizalde01/homebrew-spinup.git" tap
+          mkdir -p tap/Formula
+          bash scripts/homebrew-formula.sh "${version}" dist/SHA256SUMS > tap/Formula/spinup.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/spinup.rb
+          git commit -m "spinup ${version}" || { echo "formula unchanged"; exit 0; }
+          git push

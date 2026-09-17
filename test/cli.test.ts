@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { execa } from "execa";
@@ -60,6 +60,8 @@ beforeEach(async () => {
   await mkdir(path.join(root, "bin"), { recursive: true });
   await mkdir(project, { recursive: true });
   await writeFile(path.join(project, ".spinup.yml"), CONFIG);
+  // A child process reports its cwd as the real path; on macOS /var is /private/var.
+  project = await realpath(project);
 
   env = {
     ...process.env,

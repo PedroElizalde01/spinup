@@ -1,8 +1,7 @@
 name: CI
 
 on:
-  # Every branch, not just main: a release branch has to be able to prove itself
-  # before it is merged or tagged.
+  # Every branch, not just main: a branch has to prove itself before it is merged or tagged.
   push:
   pull_request:
   workflow_dispatch:
@@ -48,10 +47,55 @@ jobs:
         run: bun audit
 
       - name: Lint shell scripts
-        run: shellcheck install.sh scripts/build-release.sh
+        run: shellcheck install.sh scripts/*.sh
+
+  native:
+    name: Test on ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            arch: aarch64
+          - name: macos-arm64
+            runner: macos-15
+            arch: arm64
+          - name: macos-x64
+            runner: macos-15-intel
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # A runner label is a request, not a guarantee; prove the architecture.
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+
+      - name: Install tmux
+        run: |
+          if command -v brew >/dev/null; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux; fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # macOS is case-insensitive and resolves /var through /private, which the
+      # migration and ownership code must handle.
+      - name: Test
+        run: bun test
+
+      - name: Build and smoke the native binary
+        run: |
+          bash scripts/build-release.sh --output dist/spinup
+          bash scripts/smoke.sh dist/spinup "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' package.json)"
 
   smoke:
-    name: Binary smoke test
+    name: Binary smoke test (glibc and musl)
     runs-on: ubuntu-latest
     needs: check
 
@@ -65,50 +109,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build standalone binary
-        run: bash scripts/build-release.sh --output dist/spinup
-
-      - name: Binary reports help and a version
+      - name: Smoke the glibc binary
         run: |
-          ./dist/spinup --help
-          version="$(./dist/spinup --version)"
-          expected="$(node -p 'require("./package.json").version')"
-          if [ "${version}" != "${expected}" ]; then
-            echo "binary reports '${version}', package.json says '${expected}'" >&2
-            exit 1
-          fi
+          bash scripts/build-release.sh --output dist/spinup
+          bash scripts/smoke.sh dist/spinup "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' package.json)"
 
-      # F04 regression: Bun autoloads .env from the invocation directory into compiled
-      # executables. Launching project A from project B must not hand B's environment
-      # to A's services. Verified to print [leaked] without the build flags.
-      - name: Binary ignores caller-directory dotenv
+      - name: Smoke the musl binary on Alpine
         run: |
-          set -euo pipefail
-          bin="${GITHUB_WORKSPACE}/dist/spinup"
-          root="$(mktemp -d)"
-          mkdir -p "${root}/caller" "${root}/project" "${root}/home"
-          echo "SPINUP_LEAK_CANARY=leaked" > "${root}/caller/.env"
-          cat > "${root}/project/.spinup.yml" <<'CONFIG'
-          name: canary
-          root: .
-          default: dev
-          actions:
-            dev:
-              mode: simple
-              tasks:
-                - name: probe
-                  cwd: .
-                  cmd: sh -c 'echo CANARY_VALUE=[$SPINUP_LEAK_CANARY]'
-          CONFIG
-          export HOME="${root}/home"
-          (cd "${root}/project" && "${bin}" canary > /dev/null)
-          output="$(cd "${root}/caller" && "${bin}" --start canary 2>&1)"
-          printf '%s\n' "${output}"
-          if printf '%s' "${output}" | grep -q 'CANARY_VALUE=\[leaked\]'; then
-            echo "FAIL: caller-directory .env leaked into the launched project" >&2
-            exit 1
-          fi
-          if ! printf '%s' "${output}" | grep -q 'CANARY_VALUE=\[\]'; then
-            echo "FAIL: probe did not run; the test proved nothing" >&2
-            exit 1
-          fi
+          bash scripts/build-release.sh --target bun-linux-x64-musl --output dist/spinup-musl
+          version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' package.json)"
+          docker run --rm -v "${PWD}:/work" -w /work alpine:3.20 \
+            sh -c "apk add --no-cache bash libstdc++ libgcc >/dev/null && bash scripts/smoke.sh dist/spinup-musl ${version}"
+
+      - name: Man page renders
+        run: bun run scripts/build-man.ts | grep -q '^\.TH SPINUP 1'
