@@ -5,6 +5,7 @@ import { Transform, type Readable, type Writable } from "node:stream";
 import { execa } from "execa";
 
 import { buildDependencyGraph } from "./dependencies.ts";
+import { CappedLog, prepareLogFile } from "./logs.ts";
 import { scheduleServices, type ServiceView } from "./readiness.ts";
 import { launchTmuxWorkspace } from "../tmux/runner.ts";
 import type { SpinupConfig, SimpleAction, Task } from "../types/config.ts";
@@ -12,6 +13,8 @@ import type { SpinupConfig, SimpleAction, Task } from "../types/config.ts";
 type ExecuteActionOptions = {
   environment?: NodeJS.ProcessEnv;
   sessionName?: string;
+  /** Write each service's output to a private per-service log under this alias. */
+  logAlias?: string;
 };
 
 type ExitSignal = "SIGINT" | "SIGTERM";
@@ -242,6 +245,7 @@ async function runSimpleAction(
   config: SpinupConfig,
   action: SimpleAction,
   environment: NodeJS.ProcessEnv,
+  logAlias?: string,
 ): Promise<void> {
   const tasks = buildDependencyGraph(action.tasks ?? []);
   const { abortController, signalReceived, cleanup } = createTerminationController();
@@ -251,6 +255,7 @@ async function runSimpleAction(
   const single = tasks.length === 1;
   const groups: OwnedGroup[] = [];
   const waits: Promise<unknown>[] = [];
+  const logs: CappedLog[] = [];
   let firstFailure: Error | undefined;
 
   // One owner for shutdown: whoever asks first starts it, everyone awaits the same run.
@@ -270,6 +275,14 @@ async function runSimpleAction(
   abortController.signal.addEventListener("abort", () => void stopEverything(), { once: true });
 
   const startTask = async (task: Task): Promise<ServiceView> => {
+    // Prepared before the process exists: once it runs, no await may come between
+    // output starting and the listeners that record it.
+    const log = logAlias ? new CappedLog(await prepareLogFile(logAlias, task.name)) : undefined;
+
+    if (log) {
+      logs.push(log);
+    }
+
     const prefix = `[${task.name}] `;
     const cwd = resolveTaskCwd(projectRoot, config, task);
     console.log(`${prefix}starting ${task.cmd}`);
@@ -310,6 +323,12 @@ async function runSimpleAction(
       pipePrefixedOutput(subprocess.stdout, prefix, process.stdout),
       pipePrefixedOutput(subprocess.stderr, prefix, process.stderr),
     ];
+
+    if (log) {
+      for (const output of outputs) {
+        output?.on("line", (line: string) => log.write(`${line}\n`));
+      }
+    }
 
     // Attached before any output can arrive, so a readiness line is never missed.
     const pattern = task.ready && "log" in task.ready ? new RegExp(task.ready.log) : undefined;
@@ -377,6 +396,7 @@ async function runSimpleAction(
   } finally {
     await stopEverything();
     cleanup();
+    await Promise.all(logs.map((log) => log.close()));
 
     if (single) {
       // Let the process exit: a piped stdin keeps reading otherwise.
@@ -399,11 +419,11 @@ export async function executeAction(
 
   if (action.mode === "tmux") {
     const sessionName = options.sessionName ?? config.name;
-    await launchTmuxWorkspace(projectRoot, config, action, sessionName, options.environment ?? process.env, actionName);
+    await launchTmuxWorkspace(projectRoot, config, action, sessionName, options.environment ?? process.env, actionName, options.logAlias);
     return;
   }
 
-  await runSimpleAction(projectRoot, config, action, options.environment ?? process.env);
+  await runSimpleAction(projectRoot, config, action, options.environment ?? process.env, options.logAlias);
 }
 
 export { exitCodeFor, Interrupted, TaskFailure };

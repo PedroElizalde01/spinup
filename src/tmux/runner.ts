@@ -2,7 +2,8 @@ import path from "node:path";
 
 import { buildDependencyGraph } from "../core/dependencies.ts";
 import { ReadinessFailure, scheduleServices } from "../core/readiness.ts";
-import { addPane, applyWindowLayout, keepPaneOnExit, paneView, renameWindow, respawnPane } from "./layout.ts";
+import { prepareLogFile, tmuxPipeCommand } from "../core/logs.ts";
+import { addPane, applyWindowLayout, keepPaneOnExit, paneView, pipePaneTo, renameWindow, respawnPane } from "./layout.ts";
 import {
   attachSession,
   createSession,
@@ -82,6 +83,7 @@ async function startPanes(
   config: SpinupConfig,
   placed: PlacedPane[],
   environment: NodeJS.ProcessEnv,
+  logAlias?: string,
 ): Promise<void> {
   const paneIds = new Map(placed.map(({ pane, paneId }) => [pane.name, paneId]));
   const ordered = buildDependencyGraph(placed.map(({ pane }) => pane));
@@ -98,6 +100,11 @@ async function startPanes(
 
       if (pane.ready && "exit" in pane.ready) {
         await keepPaneOnExit(paneId);
+      }
+
+      // Opened before the command starts, so its first lines are captured.
+      if (logAlias) {
+        await pipePaneTo(paneId, tmuxPipeCommand(await prepareLogFile(logAlias, pane.name)));
       }
 
       await respawnPane(paneId, {
@@ -119,6 +126,7 @@ export async function launchTmuxWorkspace(
   sessionName: string,
   environment: NodeJS.ProcessEnv,
   actionName = config.default,
+  logAlias?: string,
 ): Promise<void> {
   await ensureTmuxInstalled();
 
@@ -158,7 +166,7 @@ export async function launchTmuxWorkspace(
     await isolateSessionEnvironment(sessionId, new Set(Object.keys(environment)));
     const placed = await buildWorkspace(sessionId, windowId, paneId, action);
     console.log("[deps] resolving dependencies");
-    await startPanes(projectRoot, config, placed, environment);
+    await startPanes(projectRoot, config, placed, environment, logAlias);
   } catch (error) {
     if (error instanceof ReadinessFailure) {
       // The services are up and their output explains the failure; keep them to look at.

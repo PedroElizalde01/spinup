@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+
+import { logPath } from "../core/logs.ts";
 import { waitUntilReady } from "../core/readiness.ts";
 import { keepPaneOnExit, paneView, respawnPane } from "../tmux/layout.ts";
 import { resolvePaneCwd } from "../tmux/runner.ts";
@@ -25,6 +28,7 @@ import {
 
 type SessionOptions = {
   action?: string;
+  logs?: boolean;
 };
 
 type OwnedSession = LoadedProject &
@@ -75,8 +79,10 @@ export async function statusProject(alias: string | undefined, options: SessionO
 
   const services = configured.map((name) => {
     const pane = panes.find((candidate) => candidate.service === name);
+    const log = logPath(session.alias, name);
     return {
       name,
+      log: existsSync(log) ? log : null,
       state: !pane ? "missing" : pane.exitStatus === undefined ? "running" : "exited",
       exitStatus: pane?.exitStatus ?? null,
       pid: pane && pane.exitStatus === undefined ? pane.pid : null,
@@ -113,7 +119,7 @@ export async function statusProject(alias: string | undefined, options: SessionO
           : service.state === "exited"
             ? `exited   status ${service.exitStatus}`
             : "missing  (its pane was closed)";
-      console.log(`  ${service.name.padEnd(width)}  ${detail}`);
+      console.log(`  ${service.name.padEnd(width)}  ${detail}${service.log ? `  log ${service.log}` : ""}`);
     }
   });
 }
@@ -156,7 +162,7 @@ export async function restartProject(alias: string | undefined, service: string 
       console.log(`Stopped ${session.alias} (${session.actionName}).`);
     }
 
-    await launchProject(session.alias, session.projectRoot, { start: true, action: session.actionName });
+    await launchProject(session.alias, session.projectRoot, { start: true, action: session.actionName, logs: options.logs });
     return;
   }
 

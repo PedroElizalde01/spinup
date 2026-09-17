@@ -348,6 +348,29 @@ describe.if(tmuxAvailable)("tmux workspace", () => {
     expect(await tmux(["has-session", "-t", "=notready"]).then(() => true, () => false)).toBe(true);
   }, 30_000);
 
+  test("--logs copies each pane's output to its private log", async () => {
+    const projectRoot = await isolateTmux();
+    const stateHome = path.join(projectRoot, "state");
+    const saved = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = stateHome;
+
+    try {
+      const action: TmuxAction = {
+        mode: "tmux",
+        windows: [{ name: "services", panes: [{ name: "api", cwd: ".", cmd: "sh -c 'echo PANE_LOGGED; sleep 30'" }] }],
+      };
+
+      await launchTmuxWorkspace(projectRoot, config(action), action, "logged", {}, "dev", "logged");
+      await Bun.sleep(1200);
+
+      const log = path.join(stateHome, "spinup", "logs", "logged", "api.log");
+      expect(await Bun.file(log).text()).toContain("PANE_LOGGED");
+    } finally {
+      process.env.XDG_STATE_HOME = saved;
+      if (saved === undefined) delete process.env.XDG_STATE_HOME;
+    }
+  }, 30_000);
+
   test("never destroys a session whose name merely shares a prefix", async () => {
     const projectRoot = await isolateTmux();
 

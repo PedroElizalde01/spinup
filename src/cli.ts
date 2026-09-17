@@ -97,6 +97,7 @@ type CliOptions = {
   update?: boolean | string;
   completion?: string;
   complete?: string;
+  logs?: boolean;
 };
 
 // `spinup | head` closes the pipe early; that is not an error worth a stack trace.
@@ -136,6 +137,7 @@ program
   .option("--interactive", "use interactive prompts with --edit")
   .option("--plan", "preview the execution plan")
   .option("--dry-run", "with --start: resolve everything and start nothing")
+  .option("--logs", "when launching: also write each service's output to a private log file")
   .option("--json", "print inspection results as JSON")
   .option("--no-color", "disable colored output")
   .option("-r, --regenerate", "re-scan the project and overwrite the project config")
@@ -193,6 +195,10 @@ program
 
     if (options.dryRun && primary !== "start") {
       throw new Error("--dry-run applies to launching only (with --start).");
+    }
+
+    if (options.logs && primary !== "start" && !(primary === "restart" && typeof options.restart !== "string")) {
+      throw new Error("--logs applies to launching and to restarting a whole session.");
     }
 
     if (options.interactive && !options.edit) {
@@ -276,7 +282,7 @@ program
       case "stop":
         return stopProject(alias, selected);
       case "restart":
-        return restartProject(alias, typeof options.restart === "string" ? options.restart : undefined, selected);
+        return restartProject(alias, typeof options.restart === "string" ? options.restart : undefined, { ...selected, logs: options.logs });
     }
 
     if (!alias && primary === "start") {
@@ -286,7 +292,12 @@ program
 
       // Runs the config in this directory as-is: no registration, no command installed, nothing generated.
       const project = await loadProject(undefined);
-      return launchProject(project.alias, project.projectRoot, { start: true, action: options.action, dryRun: options.dryRun });
+      return launchProject(project.alias, project.projectRoot, {
+        start: true,
+        action: options.action,
+        dryRun: options.dryRun,
+        logs: options.logs,
+      });
     }
 
     if (!alias) {
@@ -304,6 +315,7 @@ program
           start: options.start,
           action: options.action,
           dryRun: options.dryRun,
+          logs: options.logs,
         });
     }
   });

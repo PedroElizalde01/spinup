@@ -20,6 +20,7 @@ import { generateConfig, generatedComments } from "../core/generator.ts";
 import { confirmAction, promptForCommand } from "../core/interactive.ts";
 import { getProject, registerProject, validateAlias } from "../core/registry.ts";
 import { scanProject } from "../core/scanner.ts";
+import { logDirectory } from "../core/logs.ts";
 import { claimedPorts, describeBusyPort, findBusyPorts } from "../core/ports.ts";
 import { createShim, getShimPath, removeShim } from "../core/shim.ts";
 import { colorEnabled } from "../ui/output.ts";
@@ -42,6 +43,7 @@ type RunProjectOptions = {
   start?: boolean;
   action?: string;
   dryRun?: boolean;
+  logs?: boolean;
 };
 
 type EnsureProjectReadyResult = {
@@ -647,9 +649,14 @@ export async function launchProject(alias: string, projectRoot: string, options:
     console.log("[run] starting dev environment...");
   }
 
+  if (options.logs) {
+    console.log(`[logs] writing service output to ${logDirectory(alias)}`);
+  }
+
   await executeAction(projectRoot, config, actionName, {
     environment,
     sessionName: sessionNameFor(alias, config, actionName),
+    logAlias: options.logs ? alias : undefined,
   });
 }
 
