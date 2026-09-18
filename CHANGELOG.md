@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-18
+
 ### Changed
 - `--graph` draws a tree: each service under the dependency that gates its start, with its readiness condition and any other dependencies as `also after`. `--json` adds `wave` to each service.
 

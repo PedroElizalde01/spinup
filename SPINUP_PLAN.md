@@ -340,10 +340,10 @@ only against fixture projects.
 | Step | Items | Release | Why this position |
 |---|---|---|---|
 | 0 | A8 dogfood on 3–5 real projects, A10 one Mac install | patch releases as needed | Real repositories will expose detection and lifecycle gaps faster than any feature. Fixes found here outrank everything below. |
-| 1 | E18 personal overrides, E15 runtime versions | **v0.6.0** | The two features that change daily and team use. Both touch config loading and `--check`, so they land together. |
+| 1 | E18 personal overrides, E15 runtime versions | **v0.7.0** | The two features that change daily and team use. Both touch config loading and `--check`, so they land together. |
 | 2 | W19 accessibility, W20 color scheme | website, no CLI release | Independent of the CLI; small. |
-| 3 | E24 Homebrew live (A15), AUR `spinup-bin` | **v0.6.x** | Channels, once there is a release worth distributing more widely. |
-| 4 | E27 crash reports | v0.7.0, optional | Only valuable once people other than the author use it. |
+| 3 | E24 Homebrew live (A15), AUR `spinup-bin` | **v0.7.x** | Channels, once there is a release worth distributing more widely. |
+| 4 | E27 crash reports | v0.8.0, optional | Only valuable once people other than the author use it. |
 | — | E19 config migrations | with the first format change | Build the mechanism when a `version: 2` exists, not before. The policy is defined now. |
 | — | W17 SEO/sharing, W21 schema hosting | when Q6 (domain) is decided | Blocked. |
 

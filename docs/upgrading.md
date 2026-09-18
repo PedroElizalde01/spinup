@@ -3,6 +3,11 @@
 Update with `spinup --update`. Each release's full list of changes is in the
 [changelog](https://github.com/PedroElizalde01/spinup/blob/main/CHANGELOG.md).
 
+## To 0.6.0
+
+`--graph` prints a tree instead of one line per service. Scripts that read it
+should use `--graph --json`, which is unchanged apart from a new `wave` field.
+
 ## To 0.5.0
 
 Nothing in an existing config needs to change.
