@@ -8,13 +8,24 @@
 ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝
 </pre>
 
-Project environment launcher CLI
+Your dev environment, one word away
+
+[![Release](https://img.shields.io/github/v/release/PedroElizalde01/spinup?style=flat-square&color=dfd8cb)](https://github.com/PedroElizalde01/spinup/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/PedroElizalde01/spinup/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/PedroElizalde01/spinup/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/PedroElizalde01/spinup?style=flat-square)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-333?style=flat-square)
+
+[Website](https://spinup.vercel.app) · [Install](https://spinup.vercel.app/install) · [Docs](https://spinup.vercel.app/docs/quick-start)
 </div>
 
 ---
 
-`spinup` registers project aliases, generates a `.spinup.yml`, and launches your dev
-environment from anywhere.
+`spinup` is a command-line tool that starts a project's local development environment
+with one command. Run it once inside a repository: it detects the stack, writes a
+`.spinup.yml` describing each service, and installs a command named after the project.
+From then on, typing that name from any directory starts every service in dependency
+order, waiting for ports, HTTP endpoints or log lines, in a tmux workspace or in the
+foreground. One binary for Linux and macOS, MIT licensed.
 
 **Documentation:** [quick start](docs/quick-start.md) · [installation](docs/installation.md) ·
 [configuration](docs/configuration.md) · [commands](docs/commands.md) ·
@@ -559,6 +570,16 @@ Options:
 `--start` is omitted from the help because the generated command passes it. It means
 "launch unless a management flag was given", so `my-app --plan` previews and `my-app`
 launches. `spinup --start <alias>` never registers anything.
+
+## Compared with other tools
+
+Like foreman, overmind, honcho or mprocs, spinup runs several processes at once. Unlike
+them, it finds the commands itself, orders services by dependencies and readiness,
+registers a global command per project, and manages the tmux session it creates:
+status, restart one service, attach, stop, logs.
+
+It does not replace Docker Compose or a task runner such as turbo or make. It starts
+them as services, alongside the processes that run outside containers.
 
 ## Build
 
