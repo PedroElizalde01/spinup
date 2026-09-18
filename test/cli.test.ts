@@ -108,7 +108,7 @@ describe("cli routing and contract", () => {
     expect(report.order[0]!.cwd).toBe(project);
 
     const graph = await spinup(["clitest", "--graph", "--action", "migrate"]);
-    expect(graph.stdout).toContain("schema depends on db");
+    expect(graph.stdout).toContain("after db");
   });
 
   test("an unknown action fails before anything happens and names the alternatives", async () => {

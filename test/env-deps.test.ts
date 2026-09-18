@@ -80,18 +80,25 @@ describe("environment and dependency resolution", () => {
     ]);
 
     expect(ordered.map((item) => item.name)).toEqual(["database", "api", "web"]);
-    expect(visualizeDependencyGraph(ordered)).toBe("database\napi depends on database\nweb depends on api");
+    expect(visualizeDependencyGraph(ordered)).toBe(
+      [
+        "database  ▮▮▮▮▮▮▮▮────────────────",
+        "api               ▮▮▮▮▮▮▮▮────────  after database",
+        "web                       ▮▮▮▮▮▮▮▮  after api",
+      ].join("\n"),
+    );
   });
 
-  // The chain rendering drew an arrow between unrelated services.
-  test("renders independent services without an edge", () => {
+  // The chain rendering drew an arrow between unrelated services; independent
+  // services share a wave.
+  test("renders independent services in the same wave", () => {
     const graph = visualizeDependencyGraph([
       { name: "web", cwd: ".", cmd: "echo web", dependsOn: ["api", "db"] },
       { name: "api", cwd: ".", cmd: "echo api" },
       { name: "db", cwd: ".", cmd: "echo db" },
     ]);
 
-    expect(graph).toBe("api\ndb\nweb depends on api, db");
+    expect(graph).toBe(["api  ▮▮▮▮▮▮▮▮────────", "db   ▮▮▮▮▮▮▮▮────────", "web          ▮▮▮▮▮▮▮▮  after api, db"].join("\n"));
   });
 
   test("detects circular dependencies", () => {

@@ -13,7 +13,7 @@ const CLI = new URL("../src/cli.ts", import.meta.url).pathname;
 export const FLAG_DEMOS: ReadonlyArray<{ flag: string; command: string[]; description: string }> = [
   { flag: "spinup my-app", command: ["spinup", "my-app"], description: "Register the project: the setup card, .spinup.yml and a my-app command." },
   { flag: "--plan", command: ["my-app", "--plan"], description: "Start order, what each service waits for, and when it counts as ready." },
-  { flag: "--graph", command: ["my-app", "--graph"], description: "The dependency graph with every readiness condition." },
+  { flag: "--graph", command: ["my-app", "--graph"], description: "A timeline of start waves: what each service waits for and when it counts as ready." },
   { flag: "--check", command: ["my-app", "--check"], description: "Required tools, the Docker daemon and busy ports. Exits 2 when the action cannot run." },
   { flag: "--doctor", command: ["my-app", "--doctor"], description: "Config, detection with the origin of each command, tools and notes." },
   { flag: "--env", command: ["my-app", "--env"], description: "Every environment file and key, values masked, later files winning." },

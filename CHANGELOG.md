@@ -7,6 +7,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- `--graph` draws a timeline: one row per service, a bar for the start wave, then what it waits for and its readiness condition. `--json` adds `wave` to each service.
+
 ### Added
 - Launch warns when a task directory declares dependencies but has no `node_modules`, instead of failing a few lines later with "command not found".
 

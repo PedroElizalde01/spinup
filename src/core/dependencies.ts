@@ -58,12 +58,40 @@ export function buildDependencyGraph<T extends Runnable>(items: T[]): T[] {
  * rendering drew a single chain through the topological order, so two unrelated
  * services appeared to depend on each other.
  */
+/** Start wave of each service: 0 for no dependencies, otherwise one past its latest dependency. */
+export function startWaves<T extends Runnable>(items: T[]): Map<string, number> {
+  const waves = new Map<string, number>();
+
+  for (const item of buildDependencyGraph(items)) {
+    waves.set(item.name, 1 + Math.max(-1, ...(item.dependsOn ?? []).map((name) => waves.get(name) ?? 0)));
+  }
+
+  return waves;
+}
+
+/**
+ * A timeline: one row per service, a bar for the wave it starts in, then what it
+ * waits for and when it counts as ready. Bars are start positions, not durations.
+ */
 export function visualizeDependencyGraph<T extends Runnable>(items: T[]): string {
-  return buildDependencyGraph(items)
+  const ordered = buildDependencyGraph(items);
+  const waves = startWaves(ordered);
+  const last = Math.max(0, ...waves.values());
+  const step = Math.max(3, Math.min(8, Math.floor(40 / (last + 1))));
+  const width = Math.max(...ordered.map((item) => item.name.length));
+
+  return ordered
+    .slice()
+    .sort((left, right) => waves.get(left.name)! - waves.get(right.name)!)
     .map((item) => {
+      const wave = waves.get(item.name)!;
+      const bar = " ".repeat(wave * step) + "▮".repeat(step) + "─".repeat((last - wave) * step);
       const dependencies = unique(item.dependsOn ?? []);
-      const line = dependencies.length > 0 ? `${item.name} depends on ${dependencies.join(", ")}` : item.name;
-      return item.ready ? `${line}  (ready when ${describeReady(item.ready)})` : line;
+      const notes = [
+        dependencies.length > 0 ? `after ${dependencies.join(", ")}` : "",
+        item.ready ? `ready when ${describeReady(item.ready)}` : "",
+      ].filter(Boolean);
+      return `${item.name.padEnd(width)}  ${bar}${notes.length > 0 ? `  ${notes.join("  ·  ")}` : ""}`;
     })
     .join("\n");
 }

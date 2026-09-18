@@ -212,7 +212,7 @@ spinup --list
 - `spinup <alias> --doctor`: inspect config, actions, stack detection, and tool availability
 - `spinup <alias> --check`: validate required tools and config paths for the selected action
 - `spinup <alias> --plan`: print start order, resolved directories, dependencies and delays
-- `spinup <alias> --graph`: show each service with the services it depends on
+- `spinup <alias> --graph`: a timeline of start waves, what each service waits for and when it is ready
 - `spinup <alias> --env`: show loaded environment keys and their origin, values masked
 - `spinup <alias> --edit`: open the config in `$EDITOR`
 - `spinup <alias> --edit --interactive`: edit the default action with prompts, keeping comments
@@ -410,9 +410,9 @@ $ spinup my-app --graph
 
 Action: dev
 
-compose  (ready when port localhost:5432)
-api depends on compose
-web depends on compose, api
+compose  ▮▮▮▮▮▮▮▮────────────────  ready when port localhost:5432
+api              ▮▮▮▮▮▮▮▮────────  after compose
+web                      ▮▮▮▮▮▮▮▮  after compose, api
 ```
 
 ### `spinup my-app --env`
@@ -540,7 +540,7 @@ Options:
   --doctor             inspect a registered project
   --env                show loaded environment variables
   --edit               edit the project config
-  --graph              show service dependency graph
+  --graph              show the start timeline of services
   --interactive        use interactive prompts with --edit
   --plan               preview the execution plan
   --dry-run            with --start: resolve everything and start nothing

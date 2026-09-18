@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { buildDependencyGraph, visualizeDependencyGraph } from "../core/dependencies.ts";
+import { buildDependencyGraph, startWaves, visualizeDependencyGraph } from "../core/dependencies.ts";
 import { detectProject } from "../core/detector.ts";
 import { loadEnv } from "../core/env.ts";
 import { describeReady } from "../core/readiness.ts";
@@ -123,10 +123,12 @@ export async function previewProjectGraph(alias: string | undefined, options: In
   const { config } = await loadProject(alias);
   const { actionName, action } = selectAction(config, options.action);
   const entries = actionEntries(action);
+  const waves = startWaves(entries);
   const report = {
     action: actionName,
     services: buildDependencyGraph(entries).map((item) => ({
       name: item.name,
+      wave: waves.get(item.name)!,
       dependsOn: item.dependsOn ?? [],
       ready: item.ready ? describeReady(item.ready) : null,
     })),
