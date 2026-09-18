@@ -70,28 +70,33 @@ export function startWaves<T extends Runnable>(items: T[]): Map<string, number> 
 }
 
 /**
- * A timeline: one row per service, a bar for the wave it starts in, then what it
- * waits for and when it counts as ready. Bars are start positions, not durations.
+ * A tree: each service hangs under the dependency that gates its start, the one
+ * in the latest wave, so any graph draws as a tree with no service repeated.
+ * Other dependencies are noted as "also after".
  */
 export function visualizeDependencyGraph<T extends Runnable>(items: T[]): string {
   const ordered = buildDependencyGraph(items);
   const waves = startWaves(ordered);
-  const last = Math.max(0, ...waves.values());
-  const step = Math.max(3, Math.min(8, Math.floor(40 / (last + 1))));
-  const width = Math.max(...ordered.map((item) => item.name.length));
+  const gate = (item: T): string | undefined =>
+    unique(item.dependsOn ?? []).reduce<string | undefined>((best, name) => (best === undefined || waves.get(name)! > waves.get(best)! ? name : best), undefined);
+  const lines: string[] = [];
 
-  return ordered
-    .slice()
-    .sort((left, right) => waves.get(left.name)! - waves.get(right.name)!)
-    .map((item) => {
-      const wave = waves.get(item.name)!;
-      const bar = " ".repeat(wave * step) + "▮".repeat(step) + "─".repeat((last - wave) * step);
-      const dependencies = unique(item.dependsOn ?? []);
+  const draw = (parent: string | undefined, prefix: string) => {
+    const children = ordered.filter((item) => gate(item) === parent);
+
+    children.forEach((item, index) => {
+      const last = index === children.length - 1;
+      const also = unique(item.dependsOn ?? []).filter((name) => name !== gate(item));
       const notes = [
-        dependencies.length > 0 ? `after ${dependencies.join(", ")}` : "",
         item.ready ? `ready when ${describeReady(item.ready)}` : "",
+        also.length > 0 ? `also after ${also.join(", ")}` : "",
       ].filter(Boolean);
-      return `${item.name.padEnd(width)}  ${bar}${notes.length > 0 ? `  ${notes.join("  ·  ")}` : ""}`;
-    })
-    .join("\n");
+      const branch = parent === undefined ? "" : last ? "└─ " : "├─ ";
+      lines.push(`${prefix}${branch}${item.name}${notes.length > 0 ? `  ${notes.join("  ·  ")}` : ""}`);
+      draw(item.name, parent === undefined ? "" : `${prefix}${last ? "   " : "│  "}`);
+    });
+  };
+
+  draw(undefined, "");
+  return lines.join("\n");
 }

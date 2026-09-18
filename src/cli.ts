@@ -138,7 +138,7 @@ program
   .option("--doctor", "inspect a registered project")
   .option("--env", "show loaded environment variables")
   .option("--edit", "edit the project config")
-  .option("--graph", "show the start timeline of services")
+  .option("--graph", "show what waits for what, as a tree")
   .option("--interactive", "use interactive prompts with --edit")
   .option("--plan", "preview the execution plan")
   .option("--dry-run", "with --start: resolve everything and start nothing")

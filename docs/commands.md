@@ -23,7 +23,7 @@ same options.
 | Command | What it does |
 |---|---|
 | `--plan` | Start order, resolved directories, dependencies, readiness conditions and delays. |
-| `--graph` | A timeline: one row per service, a bar for the wave it starts in, what it waits for and when it counts as ready. Bars are start positions, not durations. |
+| `--graph` | A tree of what waits for what. Each service sits under the dependency that gates its start, with its readiness condition; other dependencies are noted as `also after`. |
 | `--env` | Environment keys, their source file, and shell overrides. Values are never shown. |
 | `--check` | Required tools, directories and busy ports for the selected action. |
 | `--doctor` | Everything `--check` does, plus actions, detection with the origin of each command, and notes. |
